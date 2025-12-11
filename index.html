@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Automated Warehouse Merge Simulator</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --accent: #38bdf8;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --green: #22c55e;
+      --orange: #f59e0b;
+      --red: #ef4444;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.1), transparent 35%),
+        radial-gradient(circle at 80% 0%, rgba(34, 197, 94, 0.1), transparent 30%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+    }
+
+    p.subtitle {
+      margin: 0 0 24px;
+      color: var(--muted);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 16px;
+      letter-spacing: 0.2px;
+    }
+
+    .panel section + section {
+      margin-top: 16px;
+      border-top: 1px solid rgba(148, 163, 184, 0.2);
+      padding-top: 16px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    input[type="text"],
+    input[type="number"] {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      background: rgba(15, 23, 42, 0.8);
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+    }
+
+    input[type="number"] {
+      appearance: textfield;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      flex: 1;
+      padding: 10px 12px;
+      border: none;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #0b1220;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease;
+      box-shadow: 0 10px 24px rgba(56, 189, 248, 0.25);
+    }
+
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      box-shadow: none;
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    .legend {
+      display: flex;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--muted);
+      align-items: center;
+    }
+
+    .chip {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+    }
+
+    .simulator {
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .line {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 12px;
+      position: relative;
+    }
+
+    .line header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .track {
+      display: grid;
+      grid-template-columns: 100px 70px 1fr 80px 100px;
+      align-items: center;
+      gap: 8px;
+      min-height: 70px;
+      overflow: hidden;
+    }
+
+    .segment {
+      position: relative;
+      height: 60px;
+      border: 1px dashed rgba(148, 163, 184, 0.35);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      padding: 0 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .segment.eval {
+      background: linear-gradient(90deg, rgba(56, 189, 248, 0.1), rgba(34, 197, 94, 0.04));
+    }
+
+    .scanner {
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .scanner span {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      margin-top: 6px;
+    }
+
+    .scanner .in {
+      background: rgba(148, 163, 184, 0.12);
+    }
+
+    .scanner .out {
+      background: rgba(148, 163, 184, 0.12);
+      border-color: rgba(148, 163, 184, 0.6);
+      color: #0b1220;
+      font-weight: 700;
+      min-width: 50px;
+    }
+
+    .out.release {
+      background: rgba(34, 197, 94, 0.2);
+      color: var(--text);
+      border-color: rgba(34, 197, 94, 0.8);
+    }
+
+    .out.stop {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--text);
+      border-color: rgba(239, 68, 68, 0.8);
+    }
+
+    .boxes {
+      position: relative;
+      flex: 1;
+      height: 100%;
+    }
+
+    .box {
+      position: absolute;
+      top: 10px;
+      width: 48px;
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #0b1220;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      box-shadow: 0 6px 12px rgba(0, 0, 0, 0.25);
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
+
+    .box.A {
+      background: var(--green);
+    }
+
+    .box.B {
+      background: var(--orange);
+    }
+
+    .box.C {
+      background: var(--red);
+    }
+
+    .metrics {
+      display: flex;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+      flex-wrap: wrap;
+    }
+
+    .metrics span {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+
+    .badge {
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .rule-banner {
+      background: linear-gradient(90deg, rgba(56, 189, 248, 0.25), rgba(34, 197, 94, 0.25));
+      border: 1px solid rgba(56, 189, 248, 0.6);
+      color: #041018;
+      padding: 10px;
+      border-radius: 12px;
+      font-weight: 700;
+      margin-top: 8px;
+      display: none;
+    }
+
+    .rule-banner.active {
+      display: block;
+    }
+
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .track {
+        grid-template-columns: 90px 60px 1fr 70px 80px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Automated Merge Decision Simulator</h1>
+  <p class="subtitle">Visual demo of 3 conveyor lines competing through a logical merge based on stackability, saturation and weighted scoring.</p>
+
+  <div class="layout">
+    <div class="panel" aria-label="Control panel">
+      <h2>Inputs &amp; Controls</h2>
+      <section>
+        <div id="inputs"></div>
+      </section>
+      <section>
+        <div class="controls">
+          <button id="playBtn">Play</button>
+          <button class="secondary" id="pauseBtn">Pause</button>
+          <button class="secondary" id="resetBtn">Reset</button>
+        </div>
+      </section>
+      <section>
+        <div class="legend">
+          <span class="chip" style="background: var(--green)"></span> A (best stackability)
+          <span class="chip" style="background: var(--orange)"></span> B
+          <span class="chip" style="background: var(--red)"></span> C (worst stackability)
+        </div>
+      </section>
+    </div>
+
+    <div class="panel simulator">
+      <h2>Merge View</h2>
+      <div id="lines"></div>
+      <div id="ruleInfo" class="rule-banner" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <script>
+    const STACK_VALUE = { A: 3, B: 2, C: 1 };
+    const PRIORITY = [0, 1, 2]; // line order preference
+    const TICK_MS = 100;
+    const SEGMENT_PX = 520;
+
+    const defaultConfig = [
+      { boxes: "ACCCB", speed: 3, cadence: 700, capacity: 20 },
+      { boxes: "BBACA", speed: 3, cadence: 800, capacity: 20 },
+      { boxes: "CCC", speed: 3, cadence: 900, capacity: 20 }
+    ];
+
+    const state = {
+      running: false,
+      tickHandle: null,
+      lines: [],
+      lastRule: "",
+      lastScores: [0, 0, 0]
+    };
+
+    function createInputForm() {
+      const container = document.getElementById("inputs");
+      defaultConfig.forEach((cfg, idx) => {
+        const wrap = document.createElement("div");
+        wrap.style.marginBottom = "14px";
+
+        wrap.innerHTML = `
+          <label>Line ${idx + 1} boxes (A/B/C)</label>
+          <input type="text" id="seq-${idx}" value="${cfg.boxes}" aria-label="Line ${idx + 1} box sequence" />
+          <div class="row" style="margin-top: 8px;">
+            <div>
+              <label>Speed</label>
+              <input type="number" id="speed-${idx}" value="${cfg.speed}" min="1" step="0.5" aria-label="Line ${idx + 1} speed" />
+            </div>
+            <div>
+              <label>Induction cadence (ms)</label>
+              <input type="number" id="cad-${idx}" value="${cfg.cadence}" min="200" step="50" aria-label="Line ${idx + 1} cadence" />
+            </div>
+          </div>
+          <div style="margin-top: 8px;">
+            <label>Evaluation capacity</label>
+            <input type="number" id="cap-${idx}" value="${cfg.capacity}" min="1" aria-label="Line ${idx + 1} capacity" />
+          </div>
+        `;
+        container.appendChild(wrap);
+      });
+    }
+
+    function initLines() {
+      const linesEl = document.getElementById("lines");
+      linesEl.innerHTML = "";
+      state.lines = defaultConfig.map((cfg, idx) => {
+        const line = {
+          id: idx,
+          sequence: cfg.boxes.split("").filter((c) => ["A", "B", "C"].includes(c.toUpperCase())),
+          pointer: 0,
+          speed: cfg.speed,
+          cadence: cfg.cadence,
+          capacity: cfg.capacity,
+          boxes: [],
+          lastInduct: 0,
+          scannerOut: 0,
+          lastDecision: "Idle",
+          saturation: 0
+        };
+
+        const lineEl = document.createElement("div");
+        lineEl.className = "line";
+        lineEl.innerHTML = `
+          <header>
+            <div>Line ${idx + 1}</div>
+            <div class="status" id="status-${idx}">Waiting</div>
+          </header>
+          <div class="track">
+            <div class="segment">Induction</div>
+            <div class="scanner">
+              Scanner IN
+              <span class="in">mark</span>
+            </div>
+            <div class="segment eval">
+              <div class="boxes" id="boxes-${idx}"></div>
+            </div>
+            <div class="scanner">
+              Scanner OUT
+              <span class="out stop" id="out-${idx}">0</span>
+            </div>
+            <div class="segment">Exit &raquo;</div>
+          </div>
+          <div class="metrics" id="metrics-${idx}"></div>
+        `;
+        linesEl.appendChild(lineEl);
+        return line;
+      });
+      updateInputsFromForm();
+    }
+
+    function updateInputsFromForm() {
+      state.lines.forEach((line, idx) => {
+        line.sequence = document
+          .getElementById(`seq-${idx}`)
+          .value.toUpperCase()
+          .split("")
+          .filter((c) => ["A", "B", "C"].includes(c));
+        line.pointer = 0;
+        line.speed = parseFloat(document.getElementById(`speed-${idx}`).value) || 1;
+        line.cadence = parseInt(document.getElementById(`cad-${idx}`).value, 10) || 500;
+        line.capacity = parseInt(document.getElementById(`cap-${idx}`).value, 10) || 20;
+        line.boxes = [];
+        line.lastInduct = 0;
+        line.scannerOut = 0;
+        line.lastDecision = "Idle";
+      });
+    }
+
+    function start() {
+      if (state.running) return;
+      state.running = true;
+      if (!state.tickHandle) {
+        let elapsed = 0;
+        state.tickHandle = setInterval(() => {
+          elapsed += TICK_MS;
+          tick(elapsed);
+        }, TICK_MS);
+      }
+    }
+
+    function pause() {
+      state.running = false;
+    }
+
+    function reset() {
+      state.running = false;
+      clearInterval(state.tickHandle);
+      state.tickHandle = null;
+      updateInputsFromForm();
+      render();
+      document.getElementById("ruleInfo").classList.remove("active");
+      document.getElementById("ruleInfo").textContent = "";
+    }
+
+    function tick(now) {
+      if (!state.running) return;
+      state.lines.forEach((line) => induct(line, now));
+      moveBoxes();
+      decide();
+      render();
+    }
+
+    function induct(line, now) {
+      if (line.pointer >= line.sequence.length) return;
+      if (line.boxes.length >= line.capacity) return;
+      if (now - line.lastInduct < line.cadence) return;
+
+      const type = line.sequence[line.pointer];
+      line.boxes.push({ id: `${line.id}-${line.pointer}`, type, position: 0, stopped: false });
+      line.pointer += 1;
+      line.lastInduct = now;
+    }
+
+    function moveBoxes() {
+      state.lines.forEach((line) => {
+        line.boxes.forEach((box) => {
+          if (box.stopped) return;
+          box.position += line.speed * (TICK_MS / 100);
+          if (box.position >= SEGMENT_PX) {
+            box.position = SEGMENT_PX;
+            box.stopped = true; // waits at exit
+          }
+        });
+        line.saturation = Math.min(1, line.boxes.length / line.capacity);
+      });
+    }
+
+    function decide() {
+      const candidates = state.lines.filter((l) => l.boxes.length && l.boxes[0].stopped);
+      if (!candidates.length) return;
+
+      let chosen = null;
+      let ruleUsed = "";
+
+      // Rule 1: top box is A
+      const rule1 = candidates.filter((l) => l.boxes[0].type === "A");
+      if (rule1.length) {
+        chosen = pickByPriority(rule1);
+        ruleUsed = "Rule 1: Exit box is stackability A";
+      }
+
+      // Rule 2: saturation >= 85%
+      if (!chosen) {
+        const rule2 = candidates.filter((l) => l.saturation >= 0.85);
+        if (rule2.length) {
+          chosen = pickByPriority(rule2);
+          ruleUsed = "Rule 2: Line saturated (>=85%)";
+        }
+      }
+
+      // Rule 3: any A in evaluation segment
+      if (!chosen) {
+        const rule3 = candidates.filter((l) => l.boxes.some((b) => b.type === "A"));
+        if (rule3.length) {
+          chosen = pickByPriority(rule3);
+          ruleUsed = "Rule 3: Contains an A in segment";
+        }
+      }
+
+      // Rule 4: weighted score
+      if (!chosen) {
+        const scores = state.lines.map((line) => computeScore(line));
+        state.lastScores = scores;
+        let max = Math.max(...candidates.map((l) => scores[l.id]));
+        const top = candidates.filter((l) => scores[l.id] === max);
+        chosen = pickByPriority(top);
+        ruleUsed = `Rule 4: Weighted score (${scores.map((s, i) => `L${i + 1}=${s}`).join(" | ")})`;
+      }
+
+      state.lastRule = ruleUsed;
+      applyDecision(chosen);
+    }
+
+    function pickByPriority(lines) {
+      return lines.sort((a, b) => PRIORITY.indexOf(a.id) - PRIORITY.indexOf(b.id))[0];
+    }
+
+    function computeScore(line) {
+      const sorted = [...line.boxes].sort((a, b) => b.position - a.position);
+      const weights = [5, 4, 3, 2, 1];
+      return sorted.reduce((acc, box, idx) => {
+        const weight = weights[idx] || 1;
+        return acc + STACK_VALUE[box.type] * weight;
+      }, 0);
+    }
+
+    function applyDecision(chosen) {
+      state.lines.forEach((line) => {
+        if (line === chosen && line.boxes.length && line.boxes[0].stopped) {
+          line.boxes.shift();
+          line.scannerOut = 99;
+          line.lastDecision = "Release";
+        } else if (line.boxes.length && line.boxes[0].stopped) {
+          line.scannerOut = 0;
+          line.lastDecision = "Stop";
+        } else {
+          line.scannerOut = 0;
+          line.lastDecision = "Idle";
+        }
+      });
+    }
+
+    function render() {
+      state.lines.forEach((line) => {
+        const boxWrap = document.getElementById(`boxes-${line.id}`);
+        boxWrap.innerHTML = "";
+        line.boxes.forEach((box) => {
+          const el = document.createElement("div");
+          el.className = `box ${box.type}`;
+          const offset = Math.min(box.position, SEGMENT_PX);
+          el.style.left = `${(offset / SEGMENT_PX) * 100}%`;
+          el.textContent = box.type;
+          if (box.stopped) el.style.transform = "scale(1.05)";
+          boxWrap.appendChild(el);
+        });
+
+        const scannerOut = document.getElementById(`out-${line.id}`);
+        scannerOut.textContent = line.scannerOut;
+        scannerOut.classList.remove("release", "stop");
+        if (line.lastDecision === "Release") scannerOut.classList.add("release");
+        if (line.lastDecision === "Stop") scannerOut.classList.add("stop");
+
+        const status = document.getElementById(`status-${line.id}`);
+        status.textContent = `${line.lastDecision} • saturation ${(line.saturation * 100).toFixed(0)}%`;
+
+        const metrics = document.getElementById(`metrics-${line.id}`);
+        const score = computeScore(line);
+        metrics.innerHTML = `
+          <span><strong class="badge">Boxes</strong> ${line.boxes.length}/${line.capacity}</span>
+          <span><strong class="badge">Score</strong> ${score}</span>
+          <span><strong class="badge">Speed</strong> ${line.speed}</span>
+          <span><strong class="badge">Cadence</strong> ${line.cadence}ms</span>
+        `;
+      });
+
+      const ruleInfo = document.getElementById("ruleInfo");
+      if (state.lastRule) {
+        ruleInfo.textContent = state.lastRule;
+        ruleInfo.classList.add("active");
+      }
+    }
+
+    // Controls
+    document.addEventListener("DOMContentLoaded", () => {
+      createInputForm();
+      initLines();
+
+      document.getElementById("playBtn").addEventListener("click", () => {
+        updateInputsFromForm();
+        start();
+      });
+
+      document.getElementById("pauseBtn").addEventListener("click", pause);
+
+      document.getElementById("resetBtn").addEventListener("click", reset);
+    });
+  </script>
+</body>
+</html>
