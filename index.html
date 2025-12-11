@@ -357,6 +357,7 @@
     const PRIORITY = [0, 1, 2]; // line order preference
     const TICK_MS = 100;
     const SEGMENT_PX = 520;
+    const BOX_SPACING = 55; // px reserved between boxes to model blocking/queuing
 
     const defaultConfig = [
       { boxes: "ACCCB", speed: 3, cadence: 700, capacity: 20 },
@@ -513,13 +514,16 @@
 
     function moveBoxes() {
       state.lines.forEach((line) => {
+        let front = null;
         line.boxes.forEach((box) => {
-          if (box.stopped) return;
-          box.position += line.speed * (TICK_MS / 100);
-          if (box.position >= SEGMENT_PX) {
-            box.position = SEGMENT_PX;
-            box.stopped = true; // waits at exit
-          }
+          const attempted = box.stopped ? box.position : box.position + line.speed * (TICK_MS / 100);
+          const maxAvailable = Math.max(0, front ? front.position - BOX_SPACING : SEGMENT_PX);
+          const newPos = Math.min(attempted, maxAvailable);
+          const hitExit = newPos >= SEGMENT_PX;
+          const blockedByFront = front && front.stopped && newPos >= maxAvailable;
+          box.position = newPos;
+          box.stopped = hitExit || blockedByFront;
+          front = box;
         });
         line.saturation = Math.min(1, line.boxes.length / line.capacity);
       });
