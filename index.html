@@ -530,17 +530,31 @@
     }
 
     function decide() {
-      const candidates = state.lines.filter((l) => l.boxes.length && l.boxes[0].stopped);
-      if (!candidates.length) return;
+      const waitingAtExit = state.lines.filter((l) => l.boxes.length && l.boxes[0].stopped);
+      const activeLines = state.lines.filter((l) => l.boxes.length);
+      if (!waitingAtExit.length) return;
 
+      const anyAInSystem = activeLines.some((l) => l.boxes.some((b) => b.type === "A"));
+      let candidates = waitingAtExit;
       let chosen = null;
       let ruleUsed = "";
+
+      if (anyAInSystem) {
+        const waitingWithA = waitingAtExit.filter((l) => l.boxes.some((b) => b.type === "A"));
+        if (!waitingWithA.length) {
+          state.lastRule = "Gate: Holding for stackability A elsewhere";
+          applyDecision(null);
+          return;
+        }
+        candidates = waitingWithA;
+        ruleUsed = "Gate: Only A allowed while A exists in system";
+      }
 
       // Rule 1: top box is A
       const rule1 = candidates.filter((l) => l.boxes[0].type === "A");
       if (rule1.length) {
         chosen = pickByPriority(rule1);
-        ruleUsed = "Rule 1: Exit box is stackability A";
+        ruleUsed = ruleUsed || "Rule 1: Exit box is stackability A";
       }
 
       // Rule 2: saturation >= 85%
@@ -548,7 +562,7 @@
         const rule2 = candidates.filter((l) => l.saturation >= 0.85);
         if (rule2.length) {
           chosen = pickByPriority(rule2);
-          ruleUsed = "Rule 2: Line saturated (>=85%)";
+          ruleUsed = ruleUsed || "Rule 2: Line saturated (>=85%)";
         }
       }
 
@@ -557,7 +571,7 @@
         const rule3 = candidates.filter((l) => l.boxes.some((b) => b.type === "A"));
         if (rule3.length) {
           chosen = pickByPriority(rule3);
-          ruleUsed = "Rule 3: Contains an A in segment";
+          ruleUsed = ruleUsed || "Rule 3: Contains an A in segment";
         }
       }
 
@@ -568,7 +582,7 @@
         let max = Math.max(...candidates.map((l) => scores[l.id]));
         const top = candidates.filter((l) => scores[l.id] === max);
         chosen = pickByPriority(top);
-        ruleUsed = `Rule 4: Weighted score (${scores.map((s, i) => `L${i + 1}=${s}`).join(" | ")})`;
+        ruleUsed = ruleUsed || `Rule 4: Weighted score (${scores.map((s, i) => `L${i + 1}=${s}`).join(" | ")})`;
       }
 
       state.lastRule = ruleUsed;
