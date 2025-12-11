@@ -422,9 +422,9 @@
     const BOX_SPACING = 55; // px reserved between boxes to model blocking/queuing
 
     const defaultConfig = [
-      { boxes: "ACCCB", speed: 3, cadence: 2000, capacity: 20 },
-      { boxes: "BBACA", speed: 3, cadence: 2000, capacity: 20 },
-      { boxes: "CCC", speed: 3, cadence: 2000, capacity: 20 }
+      { boxes: "CCCCCCB", speed: 4, cadence: 3000, capacity: 10 },
+      { boxes: "BBACA", speed: 3, cadence: 4000, capacity: 10 },
+      { boxes: "CCCCCC", speed: 5, cadence: 2000, capacity: 10 }
     ];
 
     const state = {
@@ -433,7 +433,8 @@
       lines: [],
       lastRule: "",
       lastScores: [0, 0, 0],
-      releaseLog: []
+      releaseLog: [],
+      completed: false
     };
 
     function createInputForm() {
@@ -451,11 +452,11 @@
               <input type="number" id="speed-${idx}" value="${cfg.speed}" min="1" step="0.5" aria-label="Line ${idx + 1} speed" />
             </div>
             <div>
-              <label>Induction cadence (s)</label>
+              <label>Cadence</label>
               <input type="number" id="cad-${idx}" value="${(cfg.cadence / 1000).toFixed(1)}" min="0.2" step="0.1" aria-label="Line ${idx + 1} cadence" />
             </div>
             <div>
-              <label>Evaluation capacity</label>
+              <label>Capacity</label>
               <input type="number" id="cap-${idx}" value="${cfg.capacity}" min="1" aria-label="Line ${idx + 1} capacity" />
             </div>
           </div>
@@ -535,6 +536,7 @@
     function start() {
       if (state.running) return;
       state.running = true;
+      state.completed = false;
       if (!state.tickHandle) {
         let elapsed = 0;
         state.tickHandle = setInterval(() => {
@@ -552,6 +554,7 @@
 
     function reset() {
       state.running = false;
+      state.completed = false;
       clearInterval(state.tickHandle);
       state.tickHandle = null;
       updateInputsFromForm();
@@ -577,6 +580,16 @@
       moveBoxes();
       decide();
       render();
+      checkCompletion();
+    }
+
+    function checkCompletion() {
+      const done = state.lines.every((line) => line.pointer >= line.sequence.length && line.boxes.length === 0);
+      if (done && state.running) {
+        state.running = false;
+        state.completed = true;
+        updatePlayPauseButton(true);
+      }
     }
 
     function induct(line, now) {
@@ -798,6 +811,9 @@
         if (state.running) {
           pause();
         } else {
+          if (state.completed) {
+            reset();
+          }
           if (!state.tickHandle) updateInputsFromForm();
           start();
         }
