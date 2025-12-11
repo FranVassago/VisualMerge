@@ -94,7 +94,7 @@
 
     .row {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       gap: 10px;
     }
 
@@ -269,6 +269,18 @@
       background: var(--red);
     }
 
+    .log-box.A {
+      background: var(--green);
+    }
+
+    .log-box.B {
+      background: var(--orange);
+    }
+
+    .log-box.C {
+      background: var(--red);
+    }
+
     .metrics {
       display: flex;
       gap: 12px;
@@ -308,6 +320,53 @@
       display: block;
     }
 
+    .log-panel {
+      margin-top: 16px;
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 10px;
+      padding: 12px;
+    }
+
+    .log-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 160px;
+      overflow: auto;
+    }
+
+    .log-row {
+      display: grid;
+      grid-template-columns: 70px 1fr;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .log-track {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 4px 0;
+    }
+
+    .log-box,
+    .log-placeholder {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      color: #0b1220;
+      flex: 0 0 auto;
+    }
+
+    .log-placeholder {
+      background: rgba(148, 163, 184, 0.18);
+      color: transparent;
+    }
+
     @media (max-width: 960px) {
       .layout {
         grid-template-columns: 1fr;
@@ -331,8 +390,7 @@
       </section>
       <section>
         <div class="controls">
-          <button id="playBtn">Play</button>
-          <button class="secondary" id="pauseBtn">Pause</button>
+          <button id="playPauseBtn">Play</button>
           <button class="secondary" id="resetBtn">Reset</button>
         </div>
       </section>
@@ -349,6 +407,10 @@
       <h2>Merge View</h2>
       <div id="lines"></div>
       <div id="ruleInfo" class="rule-banner" aria-live="polite"></div>
+      <div class="log-panel">
+        <h3 style="margin: 0 0 8px; font-size: 14px;">Release Log</h3>
+        <div class="log-rows" id="releaseLog"></div>
+      </div>
     </div>
   </div>
 
@@ -360,9 +422,9 @@
     const BOX_SPACING = 55; // px reserved between boxes to model blocking/queuing
 
     const defaultConfig = [
-      { boxes: "ACCCB", speed: 3, cadence: 700, capacity: 20 },
-      { boxes: "BBACA", speed: 3, cadence: 800, capacity: 20 },
-      { boxes: "CCC", speed: 3, cadence: 900, capacity: 20 }
+      { boxes: "ACCCB", speed: 3, cadence: 2000, capacity: 20 },
+      { boxes: "BBACA", speed: 3, cadence: 2000, capacity: 20 },
+      { boxes: "CCC", speed: 3, cadence: 2000, capacity: 20 }
     ];
 
     const state = {
@@ -370,7 +432,8 @@
       tickHandle: null,
       lines: [],
       lastRule: "",
-      lastScores: [0, 0, 0]
+      lastScores: [0, 0, 0],
+      releaseLog: []
     };
 
     function createInputForm() {
@@ -388,13 +451,13 @@
               <input type="number" id="speed-${idx}" value="${cfg.speed}" min="1" step="0.5" aria-label="Line ${idx + 1} speed" />
             </div>
             <div>
-              <label>Induction cadence (ms)</label>
-              <input type="number" id="cad-${idx}" value="${cfg.cadence}" min="200" step="50" aria-label="Line ${idx + 1} cadence" />
+              <label>Induction cadence (s)</label>
+              <input type="number" id="cad-${idx}" value="${(cfg.cadence / 1000).toFixed(1)}" min="0.2" step="0.1" aria-label="Line ${idx + 1} cadence" />
             </div>
-          </div>
-          <div style="margin-top: 8px;">
-            <label>Evaluation capacity</label>
-            <input type="number" id="cap-${idx}" value="${cfg.capacity}" min="1" aria-label="Line ${idx + 1} capacity" />
+            <div>
+              <label>Evaluation capacity</label>
+              <input type="number" id="cap-${idx}" value="${cfg.capacity}" min="1" aria-label="Line ${idx + 1} capacity" />
+            </div>
           </div>
         `;
         container.appendChild(wrap);
@@ -458,13 +521,15 @@
           .filter((c) => ["A", "B", "C"].includes(c));
         line.pointer = 0;
         line.speed = parseFloat(document.getElementById(`speed-${idx}`).value) || 1;
-        line.cadence = parseInt(document.getElementById(`cad-${idx}`).value, 10) || 500;
+        const cadenceSeconds = parseFloat(document.getElementById(`cad-${idx}`).value);
+        line.cadence = !isNaN(cadenceSeconds) ? cadenceSeconds * 1000 : 2000;
         line.capacity = parseInt(document.getElementById(`cap-${idx}`).value, 10) || 20;
         line.boxes = [];
         line.lastInduct = 0;
         line.scannerOut = 0;
         line.lastDecision = "Idle";
       });
+      state.releaseLog = [];
     }
 
     function start() {
@@ -477,10 +542,12 @@
           tick(elapsed);
         }, TICK_MS);
       }
+      updatePlayPauseButton();
     }
 
     function pause() {
       state.running = false;
+      updatePlayPauseButton();
     }
 
     function reset() {
@@ -491,6 +558,17 @@
       render();
       document.getElementById("ruleInfo").classList.remove("active");
       document.getElementById("ruleInfo").textContent = "";
+      updatePlayPauseButton(true);
+    }
+
+    function updatePlayPauseButton(forcePlay = false) {
+      const btn = document.getElementById("playPauseBtn");
+      if (!btn) return;
+      if (forcePlay || !state.running) {
+        btn.textContent = "Play";
+      } else {
+        btn.textContent = "Pause";
+      }
     }
 
     function tick(now) {
@@ -605,9 +683,11 @@
     function applyDecision(chosen) {
       state.lines.forEach((line) => {
         if (line === chosen && line.boxes.length && line.boxes[0].stopped) {
+          const releasedBox = line.boxes[0];
           line.boxes.shift();
           line.scannerOut = 99;
           line.lastDecision = "Release";
+          state.releaseLog.push({ line: line.id, type: releasedBox.type });
         } else if (line.boxes.length && line.boxes[0].stopped) {
           line.scannerOut = 0;
           line.lastDecision = "Stop";
@@ -647,7 +727,7 @@
           <span><strong class="badge">Boxes</strong> ${line.boxes.length}/${line.capacity}</span>
           <span><strong class="badge">Score</strong> ${score}</span>
           <span><strong class="badge">Speed</strong> ${line.speed}</span>
-          <span><strong class="badge">Cadence</strong> ${line.cadence}ms</span>
+          <span><strong class="badge">Cadence</strong> ${(line.cadence / 1000).toFixed(1)}s</span>
         `;
       });
 
@@ -656,6 +736,47 @@
         ruleInfo.textContent = state.lastRule;
         ruleInfo.classList.add("active");
       }
+
+      renderLog();
+    }
+
+    function renderLog() {
+      const log = document.getElementById("releaseLog");
+      if (!log) return;
+      log.innerHTML = "";
+      const columns = state.releaseLog.length;
+      const lines = state.lines.length;
+
+      for (let i = 0; i < lines; i++) {
+        const row = document.createElement("div");
+        row.className = "log-row";
+
+        const label = document.createElement("div");
+        label.textContent = `Line ${i + 1}`;
+        label.style.fontWeight = "700";
+        label.style.fontSize = "12px";
+        row.appendChild(label);
+
+        const track = document.createElement("div");
+        track.className = "log-track";
+
+        for (let col = 0; col < columns; col++) {
+          const evt = state.releaseLog[col];
+          if (evt && evt.line === i) {
+            const box = document.createElement("div");
+            box.className = `log-box ${evt.type}`;
+            box.textContent = evt.type;
+            track.appendChild(box);
+          } else {
+            const placeholder = document.createElement("div");
+            placeholder.className = "log-placeholder";
+            track.appendChild(placeholder);
+          }
+        }
+
+        row.appendChild(track);
+        log.appendChild(row);
+      }
     }
 
     // Controls
@@ -663,12 +784,14 @@
       createInputForm();
       initLines();
 
-      document.getElementById("playBtn").addEventListener("click", () => {
-        updateInputsFromForm();
-        start();
+      document.getElementById("playPauseBtn").addEventListener("click", () => {
+        if (state.running) {
+          pause();
+        } else {
+          if (!state.tickHandle) updateInputsFromForm();
+          start();
+        }
       });
-
-      document.getElementById("pauseBtn").addEventListener("click", pause);
 
       document.getElementById("resetBtn").addEventListener("click", reset);
     });
