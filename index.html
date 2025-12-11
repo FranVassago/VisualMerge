@@ -655,12 +655,22 @@
 
       // Rule 4: weighted score
       if (!chosen) {
-        const scores = state.lines.map((line) => computeScore(line));
-        state.lastScores = scores;
-        let max = Math.max(...candidates.map((l) => scores[l.id]));
-        const top = candidates.filter((l) => scores[l.id] === max);
+        const scoreMap = new Map();
+        activeLines.forEach((line) => scoreMap.set(line.id, computeScore(line)));
+        state.lastScores = state.lines.map((line) => scoreMap.get(line.id) || 0);
+
+        const globalMax = Math.max(...activeLines.map((l) => scoreMap.get(l.id)));
+        const top = candidates.filter((l) => scoreMap.get(l.id) === globalMax);
+        if (!top.length) {
+          state.lastRule =
+            ruleUsed || `Rule 4: Weighted score (${state.lastScores.map((s, i) => `L${i + 1}=${s}`).join(" | ")}) — holding for global max`;
+          applyDecision(null);
+          return;
+        }
+
         chosen = pickByPriority(top);
-        ruleUsed = ruleUsed || `Rule 4: Weighted score (${scores.map((s, i) => `L${i + 1}=${s}`).join(" | ")})`;
+        ruleUsed =
+          ruleUsed || `Rule 4: Weighted score (${state.lastScores.map((s, i) => `L${i + 1}=${s}`).join(" | ")})`;
       }
 
       state.lastRule = ruleUsed;
