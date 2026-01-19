@@ -2,32 +2,34 @@ First Commit
 
 ---
 
-Simulation Documentation
+Documentación de la simulación
 
-Decision Priorities (evaluated in strict order)
-1) Rule 1 — Exit box stackability A: if a line waiting at the exit has an A on top, it can pass.
-2) Rule 2 — Saturation >= 85%: if a waiting line is saturated, it can pass.
-3) Rule 3 — Any A in the evaluation segment: if a waiting line contains any A, it can pass.
-4) Rule 4 — Weighted score: compute the weighted score per active line and allow only
-   waiting lines that match the global maximum score. If none match, hold.
-5) Tie-breaker — Fixed priority: Line 1 > Line 2 > Line 3.
+Prioridades de decisión (orden estricto)
+1) Regla 1 — Caja en salida con stackability A: si una línea esperando en el escáner de salida
+   tiene una A en la primera posición, puede pasar.
+2) Regla 2 — Saturación >= 85%: si una línea esperando está saturada, puede pasar.
+3) Regla 3 — Existe alguna A en el segmento de evaluación: si una línea esperando contiene
+   alguna A, puede pasar.
+4) Regla 4 — Puntuación ponderada: se calcula la puntuación por línea activa y solo pasan
+   líneas en espera que igualan el máximo global. Si ninguna coincide, se espera.
+5) Desempate — Prioridad fija: Línea 1 > Línea 2 > Línea 3.
 
-System-wide gates (applied before Rule 1)
-- waitingAtExit: lines with a stopped box at the exit scanner.
-- activeLines: lines with at least one box in the evaluation segment.
-- If any active line has an A, only waiting lines that also contain an A are eligible to pass.
-  If no waiting line contains an A, the system holds for that cycle.
+Puertas globales (antes de la Regla 1)
+- waitingAtExit: líneas con una caja detenida en el escáner de salida.
+- activeLines: líneas con al menos una caja en el segmento de evaluación.
+- Si cualquier línea activa tiene una A, solo las líneas en espera que también contienen una A
+  son elegibles. Si ninguna línea en espera tiene A, el sistema se mantiene en espera.
 
-Factors used in calculations
-- Stackability values: A=3, B=2, C=1.
-- Saturation: boxes_in_evaluation / capacity (clamped to 100%).
-- Weighted score: sum of stackability_value * position_weight, where boxes closer to the exit
-  have higher weights (5,4,3,2,1...).
+Factores usados en los cálculos
+- Valores de stackability: A=3, B=2, C=1.
+- Saturación: cajas_en_evaluación / capacidad (limitado a 100%).
+- Puntuación ponderada: suma de stackability * peso_por_posición, donde las cajas más cercanas
+  a la salida tienen pesos mayores (5,4,3,2,1...).
 
-Recurring events and evaluation calls
-- Tick loop (every 100ms):
-  1) Induction: inject boxes based on cadence and capacity.
-  2) Movement: advance boxes, apply blocking, update saturation.
-  3) Decision: evaluate waiting lines against system-wide rules and release/stop.
-  4) Render: update UI, metrics, logs, and scanner states.
-  5) Completion check: stop the simulation when all sequences are processed.
+Eventos recurrentes y llamadas de evaluación
+- Bucle de ticks (cada 100ms):
+  1) Inducción: inserta cajas según cadencia y capacidad.
+  2) Movimiento: avanza cajas, aplica bloqueo y actualiza saturación.
+  3) Decisión: evalúa reglas globales y libera/retiene.
+  4) Renderizado: actualiza UI, métricas, logs y estados de escáneres.
+  5) Fin de simulación: detiene cuando todas las secuencias se han procesado.
