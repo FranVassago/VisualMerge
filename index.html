@@ -367,6 +367,48 @@
       color: transparent;
     }
 
+    .log-box {
+      position: relative;
+    }
+
+    .log-box .log-line {
+      position: absolute;
+      bottom: -8px;
+      right: -6px;
+      background: rgba(15, 23, 42, 0.85);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 1px 5px;
+      font-size: 9px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      line-height: 1.2;
+    }
+
+    .saturation-wrap {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .saturation-bar {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.2);
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+
+    .saturation-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, rgba(56, 189, 248, 0.7), rgba(34, 197, 94, 0.8));
+      transition: width 0.2s ease;
+    }
+
     @media (max-width: 960px) {
       .layout {
         grid-template-columns: 1fr;
@@ -403,13 +445,17 @@
       </section>
     </div>
 
-    <div class="panel simulator">
+      <div class="panel simulator">
       <h2>Merge View</h2>
       <div id="lines"></div>
       <div id="ruleInfo" class="rule-banner" aria-live="polite"></div>
       <div class="log-panel">
         <h3 style="margin: 0 0 8px; font-size: 14px;">Release Log</h3>
         <div class="log-rows" id="releaseLog"></div>
+      </div>
+      <div class="log-panel">
+        <h3 style="margin: 0 0 8px; font-size: 14px;">Incoming Log</h3>
+        <div class="log-rows" id="incomingLog"></div>
       </div>
     </div>
   </div>
@@ -434,6 +480,7 @@
       lastRule: "",
       lastScores: [0, 0, 0],
       releaseLog: [],
+      incomingLog: [[], [], []],
       completed: false
     };
 
@@ -506,6 +553,12 @@
             <div class="segment">Exit &raquo;</div>
           </div>
           <div class="metrics" id="metrics-${idx}"></div>
+          <div class="saturation-wrap">
+            <div class="saturation-bar">
+              <div class="saturation-fill" id="saturation-fill-${idx}"></div>
+            </div>
+            <div id="saturation-label-${idx}">0%</div>
+          </div>
         `;
         linesEl.appendChild(lineEl);
         return line;
@@ -531,6 +584,7 @@
         line.lastDecision = "Idle";
       });
       state.releaseLog = [];
+      state.incomingLog = [[], [], []];
     }
 
     function start() {
@@ -598,7 +652,7 @@
       if (now - line.lastInduct < line.cadence) return;
 
       const type = line.sequence[line.pointer];
-      line.boxes.push({ id: `${line.id}-${line.pointer}`, type, position: 0, stopped: false });
+      line.boxes.push({ id: `${line.id}-${line.pointer}`, type, position: 0, stopped: false, loggedIn: false });
       line.pointer += 1;
       line.lastInduct = now;
     }
@@ -614,6 +668,10 @@
           const blockedByFront = front && front.stopped && newPos >= maxAvailable;
           box.position = newPos;
           box.stopped = hitExit || blockedByFront;
+          if (!box.loggedIn) {
+            state.incomingLog[line.id].push(box.type);
+            box.loggedIn = true;
+          }
           front = box;
         });
         line.saturation = Math.min(1, line.boxes.length / line.capacity);
@@ -752,6 +810,12 @@
           <span><strong class="badge">Speed</strong> ${line.speed}</span>
           <span><strong class="badge">Cadence</strong> ${(line.cadence / 1000).toFixed(1)}s</span>
         `;
+
+        const saturationFill = document.getElementById(`saturation-fill-${line.id}`);
+        const saturationLabel = document.getElementById(`saturation-label-${line.id}`);
+        const saturationPct = Math.round(line.saturation * 100);
+        saturationFill.style.width = `${saturationPct}%`;
+        saturationLabel.textContent = `${saturationPct}%`;
       });
 
       const ruleInfo = document.getElementById("ruleInfo");
@@ -761,21 +825,51 @@
       }
 
       renderLog();
+      renderIncomingLog();
     }
 
     function renderLog() {
       const log = document.getElementById("releaseLog");
       if (!log) return;
       log.innerHTML = "";
-      const columns = state.releaseLog.length;
-      const lines = state.lines.length;
+      const row = document.createElement("div");
+      row.className = "log-row";
 
-      for (let i = 0; i < lines; i++) {
+      const label = document.createElement("div");
+      label.textContent = "Order";
+      label.style.fontWeight = "700";
+      label.style.fontSize = "12px";
+      row.appendChild(label);
+
+      const track = document.createElement("div");
+      track.className = "log-track";
+
+      state.releaseLog.forEach((evt) => {
+        const box = document.createElement("div");
+        box.className = `log-box ${evt.type}`;
+        box.textContent = evt.type;
+        const lineTag = document.createElement("span");
+        lineTag.className = "log-line";
+        lineTag.textContent = `L${evt.line + 1}`;
+        box.appendChild(lineTag);
+        track.appendChild(box);
+      });
+
+      row.appendChild(track);
+      log.appendChild(row);
+    }
+
+    function renderIncomingLog() {
+      const log = document.getElementById("incomingLog");
+      if (!log) return;
+      log.innerHTML = "";
+
+      state.incomingLog.forEach((entries, idx) => {
         const row = document.createElement("div");
         row.className = "log-row";
 
         const label = document.createElement("div");
-        label.textContent = `Line ${i + 1}`;
+        label.textContent = `Line ${idx + 1}`;
         label.style.fontWeight = "700";
         label.style.fontSize = "12px";
         row.appendChild(label);
@@ -783,23 +877,16 @@
         const track = document.createElement("div");
         track.className = "log-track";
 
-        for (let col = 0; col < columns; col++) {
-          const evt = state.releaseLog[col];
-          if (evt && evt.line === i) {
-            const box = document.createElement("div");
-            box.className = `log-box ${evt.type}`;
-            box.textContent = evt.type;
-            track.appendChild(box);
-          } else {
-            const placeholder = document.createElement("div");
-            placeholder.className = "log-placeholder";
-            track.appendChild(placeholder);
-          }
-        }
+        entries.forEach((type) => {
+          const box = document.createElement("div");
+          box.className = `log-box ${type}`;
+          box.textContent = type;
+          track.appendChild(box);
+        });
 
         row.appendChild(track);
         log.appendChild(row);
-      }
+      });
     }
 
     // Controls
