@@ -333,12 +333,16 @@
       flex-direction: column;
       gap: 6px;
       max-height: 160px;
-      overflow: auto;
+      overflow-y: auto;
     }
 
     .log-rows.release-log {
       max-height: none;
       overflow: visible;
+    }
+
+    .log-rows.incoming-log {
+      overflow-x: auto;
     }
 
     .log-row {
@@ -351,8 +355,17 @@
     .log-track {
       display: flex;
       gap: 6px;
-      overflow-x: auto;
+      overflow: visible;
       padding: 4px 0;
+      width: max-content;
+    }
+
+    .log-rows.release-log .log-track {
+      overflow-x: auto;
+    }
+
+    .log-rows.incoming-log .log-row {
+      min-width: max-content;
     }
 
     .log-box,
@@ -392,15 +405,15 @@
     .saturation-wrap {
       margin-top: 8px;
       display: grid;
-      grid-template-columns: 1fr;
-      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
       font-size: 12px;
       color: var(--muted);
     }
 
     .bar-row {
       display: grid;
-      grid-template-columns: auto 1fr auto;
+      grid-template-columns: auto auto auto;
       align-items: center;
       gap: 8px;
     }
@@ -416,6 +429,7 @@
       background: rgba(148, 163, 184, 0.2);
       overflow: hidden;
       border: 1px solid rgba(148, 163, 184, 0.2);
+      width: 140px;
     }
 
     .metric-fill {
@@ -475,7 +489,7 @@
       </div>
       <div class="log-panel">
         <h3 style="margin: 0 0 8px; font-size: 14px;">Incoming Log</h3>
-        <div class="log-rows" id="incomingLog"></div>
+        <div class="log-rows incoming-log" id="incomingLog"></div>
       </div>
     </div>
   </div>
