@@ -336,6 +336,11 @@
       overflow: auto;
     }
 
+    .log-rows.release-log {
+      max-height: none;
+      overflow: visible;
+    }
+
     .log-row {
       display: grid;
       grid-template-columns: 70px 1fr;
@@ -387,14 +392,25 @@
     .saturation-wrap {
       margin-top: 8px;
       display: grid;
-      grid-template-columns: 1fr auto;
-      align-items: center;
+      grid-template-columns: 1fr;
       gap: 8px;
       font-size: 12px;
       color: var(--muted);
     }
 
-    .saturation-bar {
+    .bar-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .bar-label {
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .metric-bar {
       height: 8px;
       border-radius: 999px;
       background: rgba(148, 163, 184, 0.2);
@@ -402,11 +418,15 @@
       border: 1px solid rgba(148, 163, 184, 0.2);
     }
 
-    .saturation-fill {
+    .metric-fill {
       height: 100%;
       width: 0%;
       background: linear-gradient(90deg, rgba(56, 189, 248, 0.7), rgba(34, 197, 94, 0.8));
       transition: width 0.2s ease;
+    }
+
+    .metric-fill.score {
+      background: linear-gradient(90deg, rgba(244, 114, 182, 0.7), rgba(251, 191, 36, 0.8));
     }
 
     @media (max-width: 960px) {
@@ -439,7 +459,7 @@
       <section>
         <div class="legend">
           <span class="chip" style="background: var(--green)"></span> A (best stackability)
-          <span class="chip" style="background: var(--orange)"></span> B
+          <span class="chip" style="background: var(--orange)"></span> B (medium stackability)
           <span class="chip" style="background: var(--red)"></span> C (worst stackability)
         </div>
       </section>
@@ -451,7 +471,7 @@
       <div id="ruleInfo" class="rule-banner" aria-live="polite"></div>
       <div class="log-panel">
         <h3 style="margin: 0 0 8px; font-size: 14px;">Release Log</h3>
-        <div class="log-rows" id="releaseLog"></div>
+        <div class="log-rows release-log" id="releaseLog"></div>
       </div>
       <div class="log-panel">
         <h3 style="margin: 0 0 8px; font-size: 14px;">Incoming Log</h3>
@@ -480,7 +500,7 @@
       lastRule: "",
       lastScores: [0, 0, 0],
       releaseLog: [],
-      incomingLog: [[], [], []],
+      incomingLog: [],
       completed: false
     };
 
@@ -554,10 +574,20 @@
           </div>
           <div class="metrics" id="metrics-${idx}"></div>
           <div class="saturation-wrap">
-            <div class="saturation-bar">
-              <div class="saturation-fill" id="saturation-fill-${idx}"></div>
+            <div class="bar-row">
+              <div class="bar-label">Weighted Score</div>
+              <div class="metric-bar">
+                <div class="metric-fill score" id="score-fill-${idx}"></div>
+              </div>
+              <div id="score-label-${idx}">0</div>
             </div>
-            <div id="saturation-label-${idx}">0%</div>
+            <div class="bar-row">
+              <div class="bar-label">Saturation</div>
+              <div class="metric-bar">
+                <div class="metric-fill" id="saturation-fill-${idx}"></div>
+              </div>
+              <div id="saturation-label-${idx}">0%</div>
+            </div>
           </div>
         `;
         linesEl.appendChild(lineEl);
@@ -584,7 +614,7 @@
         line.lastDecision = "Idle";
       });
       state.releaseLog = [];
-      state.incomingLog = [[], [], []];
+      state.incomingLog = [];
     }
 
     function start() {
@@ -669,7 +699,7 @@
           box.position = newPos;
           box.stopped = hitExit || blockedByFront;
           if (!box.loggedIn) {
-            state.incomingLog[line.id].push(box.type);
+            logIncomingArrival(line.id, box.type);
             box.loggedIn = true;
           }
           front = box;
@@ -780,6 +810,8 @@
     }
 
     function render() {
+      const scores = state.lines.map((line) => computeScore(line));
+      const maxScore = Math.max(1, ...scores);
       state.lines.forEach((line) => {
         const boxWrap = document.getElementById(`boxes-${line.id}`);
         boxWrap.innerHTML = "";
@@ -803,7 +835,7 @@
         status.textContent = `${line.lastDecision} • saturation ${(line.saturation * 100).toFixed(0)}%`;
 
         const metrics = document.getElementById(`metrics-${line.id}`);
-        const score = computeScore(line);
+        const score = scores[line.id];
         metrics.innerHTML = `
           <span><strong class="badge">Boxes</strong> ${line.boxes.length}/${line.capacity}</span>
           <span><strong class="badge">Score</strong> ${score}</span>
@@ -811,9 +843,14 @@
           <span><strong class="badge">Cadence</strong> ${(line.cadence / 1000).toFixed(1)}s</span>
         `;
 
+        const scoreFill = document.getElementById(`score-fill-${line.id}`);
+        const scoreLabel = document.getElementById(`score-label-${line.id}`);
         const saturationFill = document.getElementById(`saturation-fill-${line.id}`);
         const saturationLabel = document.getElementById(`saturation-label-${line.id}`);
+        const scorePct = Math.round((score / maxScore) * 100);
         const saturationPct = Math.round(line.saturation * 100);
+        scoreFill.style.width = `${scorePct}%`;
+        scoreLabel.textContent = score;
         saturationFill.style.width = `${saturationPct}%`;
         saturationLabel.textContent = `${saturationPct}%`;
       });
@@ -864,7 +901,8 @@
       if (!log) return;
       log.innerHTML = "";
 
-      state.incomingLog.forEach((entries, idx) => {
+      const columns = state.incomingLog.length;
+      state.lines.forEach((line, idx) => {
         const row = document.createElement("div");
         row.className = "log-row";
 
@@ -877,16 +915,28 @@
         const track = document.createElement("div");
         track.className = "log-track";
 
-        entries.forEach((type) => {
-          const box = document.createElement("div");
-          box.className = `log-box ${type}`;
-          box.textContent = type;
-          track.appendChild(box);
-        });
+        for (let col = 0; col < columns; col++) {
+          const entry = state.incomingLog[col][idx];
+          if (entry) {
+            const box = document.createElement("div");
+            box.className = `log-box ${entry}`;
+            box.textContent = entry;
+            track.appendChild(box);
+          } else {
+            const placeholder = document.createElement("div");
+            placeholder.className = "log-placeholder";
+            track.appendChild(placeholder);
+          }
+        }
 
         row.appendChild(track);
         log.appendChild(row);
       });
+    }
+
+    function logIncomingArrival(lineId, type) {
+      const column = state.lines.map((_, idx) => (idx === lineId ? type : null));
+      state.incomingLog.push(column);
     }
 
     // Controls
