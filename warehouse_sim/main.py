@@ -49,8 +49,6 @@ class Box:
     current_cell: Tuple[int, int]
     current_element: Optional[Tuple[int, int]]
     next_diverter_dir: Optional[Tuple[int, int]] = None
-    pending_direction: Optional[Tuple[int, int]] = None
-    pending_turn_cell: Optional[Tuple[int, int]] = None
 
 
 class WarehouseSim:
@@ -140,14 +138,6 @@ class WarehouseSim:
 
     def world_to_cell(self, wx: float, wy: float) -> Tuple[int, int]:
         return math.floor(wx / CELL_SIZE), math.floor(wy / CELL_SIZE)
-
-    def zoom_with_center_anchor(self, new_zoom: float) -> None:
-        center_sx = WINDOW_W / 2
-        center_sy = WINDOW_H / 2
-        center_wx, center_wy = self.screen_to_world(int(center_sx), int(center_sy))
-        self.zoom = new_zoom
-        self.camera_x = center_wx - center_sx / self.zoom
-        self.camera_y = center_wy - center_sy / self.zoom
 
     def cell_center(self, cell: Tuple[int, int]) -> Tuple[float, float]:
         return (cell[0] * CELL_SIZE + CELL_SIZE / 2, cell[1] * CELL_SIZE + CELL_SIZE / 2)
@@ -241,34 +231,17 @@ class WarehouseSim:
                     target_el.fifo.append(box.box_id)
                     box.current_element = next_cell
                     self.log(f"Caja {box.box_id} entra en {target_el.kind} {next_cell}")
-                    box.pending_direction = self.element_direction(next_cell, target_el, box)
-                    box.pending_turn_cell = next_cell
                     if target_el.kind != "diverter":
                         box.next_diverter_dir = None
                 else:
                     box.current_element = None
-                    box.pending_direction = None
-                    box.pending_turn_cell = None
         else:
             box.x = new_x
             box.y = new_y
 
-        if box.pending_turn_cell is not None and box.pending_direction is not None:
-            if self.world_to_cell(box.x, box.y) == box.pending_turn_cell:
-                center_x, center_y = self.cell_center(box.pending_turn_cell)
-                old_dx, old_dy = box.direction
-                reached_center = (
-                    (old_dx > 0 and box.x >= center_x)
-                    or (old_dx < 0 and box.x <= center_x)
-                    or (old_dy > 0 and box.y >= center_y)
-                    or (old_dy < 0 and box.y <= center_y)
-                )
-                if reached_center:
-                    box.x = center_x
-                    box.y = center_y
-                    box.direction = box.pending_direction
-                    box.pending_direction = None
-                    box.pending_turn_cell = None
+        current_el = self.elements.get(self.world_to_cell(box.x, box.y))
+        if current_el is not None:
+            box.direction = self.element_direction(self.world_to_cell(box.x, box.y), current_el, box)
 
     def update_simulation(self, dt: float) -> None:
         if not self.is_running:
@@ -383,15 +356,13 @@ class WarehouseSim:
                 pygame.draw.rect(self.screen, YELLOW, (sx, sy, size, size), 2)
 
     def draw_boxes(self) -> None:
-        side = max(4, int(110 * self.zoom))
+        radius = max(4, int(16 * self.zoom))
         for box in self.boxes.values():
             sx, sy = self.world_to_screen(box.x, box.y)
-            rect = pygame.Rect(sx - side // 2, sy - side // 2, side, side)
-            pygame.draw.rect(self.screen, BLUE, rect, border_radius=max(1, int(8 * self.zoom)))
-            pygame.draw.rect(self.screen, WHITE, rect, 1, border_radius=max(1, int(8 * self.zoom)))
+            pygame.draw.circle(self.screen, BLUE, (sx, sy), radius)
             tid = self.small_font.render(str(box.box_id), True, (20, 20, 20))
-            txt_rect = tid.get_rect(center=(sx, sy))
-            self.screen.blit(tid, txt_rect)
+            rect = tid.get_rect(center=(sx, sy))
+            self.screen.blit(tid, rect)
 
     def draw_ui(self) -> None:
         # Top controls
@@ -490,7 +461,6 @@ class WarehouseSim:
         self.occupants.clear()
         for e in self.elements.values():
             e.fifo.clear()
-        self.is_running = False
         self.log("Stop: cajas eliminadas")
 
     def handle_toolbar_click(self, pos: Tuple[int, int]) -> bool:
@@ -569,6 +539,8 @@ class WarehouseSim:
                 wx, wy = self.screen_to_world(*pos)
                 cell = self.world_to_cell(wx, wy)
                 self.elements[cell] = Element(kind=self.place_kind, rotation=self.place_rotation)
+                self.mode = "idle"
+                self.place_kind = None
             elif event.button == 3:
                 self.place_rotation = (self.place_rotation + 90) % 360
             return
@@ -648,9 +620,9 @@ class WarehouseSim:
                     self.load_layout()
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 4:
-                    self.zoom_with_center_anchor(min(2.4, self.zoom * 1.1))
+                    self.zoom = min(2.4, self.zoom * 1.1)
                 elif event.button == 5:
-                    self.zoom_with_center_anchor(max(0.2, self.zoom / 1.1))
+                    self.zoom = max(0.2, self.zoom / 1.1)
                 else:
                     self.handle_mouse_down(event)
             if event.type == pygame.MOUSEBUTTONUP:
