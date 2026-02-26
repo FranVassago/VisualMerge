@@ -5,6 +5,8 @@ from typing import Optional
 
 import oracledb
 
+from core.logging_utils import build_logger
+
 
 @dataclass
 class OracleConnectionConfig:
@@ -27,6 +29,7 @@ class OracleIdProvider:
     def __init__(self, connection: OracleConnectionConfig, queries: OracleQueryConfig) -> None:
         self.connection = connection
         self.queries = queries
+        self.logger = build_logger()
 
     def get_next_box_id(self) -> str:
         value = self._fetch_single_value(self.queries.box_id_query)
@@ -38,10 +41,16 @@ class OracleIdProvider:
 
     def _fetch_single_value(self, query: str) -> Optional[str]:
         dsn = oracledb.makedsn(self.connection.host, self.connection.port, sid=self.connection.sid)
-        with oracledb.connect(user=self.connection.user, password=self.connection.password, dsn=dsn) as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query)
-                row = cursor.fetchone()
-                if row is None:
-                    raise ValueError(f"La consulta no devolvió resultados: {query}")
-                return row[0]
+        try:
+            with oracledb.connect(user=self.connection.user, password=self.connection.password, dsn=dsn) as conn:
+                with conn.cursor() as cursor:
+                    self.logger.info("Executing Oracle query: %s", query)
+                    cursor.execute(query)
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise ValueError(f"La consulta no devolvió resultados: {query}")
+                    self.logger.info("Oracle query result type=%s value=%r", type(row[0]).__name__, row[0])
+                    return row[0]
+        except Exception:
+            self.logger.exception("Oracle query failed: %s", query)
+            raise
