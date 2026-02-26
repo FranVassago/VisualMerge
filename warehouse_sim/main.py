@@ -1,17 +1,18 @@
+import configparser
 import json
 import math
-import configparser
+import urllib.error
+import urllib.request
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import pygame
 
 CELL_SIZE = 124
 WINDOW_W, WINDOW_H = 1400, 900
 BG_COLOR = (8, 8, 10)
-GRID_COLOR = (65, 65, 70)
 WHITE = (235, 235, 235)
 GREEN = (122, 199, 76)
 YELLOW = (235, 196, 64)
@@ -20,7 +21,6 @@ BLUE = (93, 164, 222)
 
 CONFIG_PATH = Path(__file__).parent / "config.ini"
 LAYOUT_PATH = Path(__file__).parent / "layout.json"
-
 
 DIRS = {
     0: (1, 0),
@@ -38,11 +38,16 @@ class Element:
     spawn_timer: float = 0.0
     rr_index: int = 0
     fifo: deque = field(default_factory=deque)
+    tag: Optional[str] = None
+    held_box_id: Optional[str] = None
+    held_tracking_id: Optional[int] = None
+    held_decision: Optional[int] = None
+    has_error: bool = False
 
 
 @dataclass
 class Box:
-    box_id: int
+    box_id: str
     x: float
     y: float
     direction: Tuple[int, int]
@@ -51,6 +56,14 @@ class Box:
     next_diverter_dir: Optional[Tuple[int, int]] = None
     pending_direction: Optional[Tuple[int, int]] = None
     pending_turn_cell: Optional[Tuple[int, int]] = None
+
+
+@dataclass
+class ContextMenu:
+    menu_type: str
+    cell: Optional[Tuple[int, int]] = None
+    box_id: Optional[str] = None
+    screen_pos: Tuple[int, int] = (0, 0)
 
 
 class WarehouseSim:
@@ -67,10 +80,12 @@ class WarehouseSim:
         self.zoom = 0.45
 
         self.elements: Dict[Tuple[int, int], Element] = {}
-        self.boxes: Dict[int, Box] = {}
+        self.boxes: Dict[str, Box] = {}
         self.occupants: Dict[Tuple[int, int], deque] = {}
         self.logs: deque = deque(maxlen=8)
-        self.next_box_id = 1
+        self.error_message: Optional[str] = None
+        self.mock_box_seq = 1000000000
+        self.mock_tracking_seq = 250
 
         self.mode = "idle"
         self.place_kind: Optional[str] = None
@@ -88,8 +103,10 @@ class WarehouseSim:
         self.show_config = False
         self.settings = {
             "sim_speed_cells": 1.7,
-            "spawn_interval": 1.8,
             "grid_gray": 65,
+            "induction_poll_interval": 5.0,
+            "scan_endpoint": "http://vpn.v10.solutions:18080/ords/merza/merza/scan",
+            "scanner_default_tag": "SCAN01",
         }
         self.load_config()
 
@@ -103,8 +120,17 @@ class WarehouseSim:
             ("load", "Cargar"),
         ]
 
+        self.context_menu: Optional[ContextMenu] = None
+        self.tag_input_value = ""
+
     def log(self, message: str) -> None:
         self.logs.appendleft(message)
+
+    def fail_with_error(self, element: Element, message: str) -> None:
+        element.has_error = True
+        self.is_running = False
+        self.error_message = message[:150]
+        self.log(f"ERROR: {self.error_message}")
 
     def load_config(self) -> None:
         if not CONFIG_PATH.exists():
@@ -114,29 +140,32 @@ class WarehouseSim:
         cfg.read(CONFIG_PATH)
         if "sim" in cfg:
             self.settings["sim_speed_cells"] = cfg.getfloat("sim", "sim_speed_cells", fallback=self.settings["sim_speed_cells"])
-            self.settings["spawn_interval"] = cfg.getfloat("sim", "spawn_interval", fallback=self.settings["spawn_interval"])
             self.settings["grid_gray"] = cfg.getint("sim", "grid_gray", fallback=self.settings["grid_gray"])
+            self.settings["induction_poll_interval"] = cfg.getfloat(
+                "sim", "induction_poll_interval", fallback=self.settings["induction_poll_interval"]
+            )
+            self.settings["scan_endpoint"] = cfg.get("sim", "scan_endpoint", fallback=self.settings["scan_endpoint"])
+            self.settings["scanner_default_tag"] = cfg.get(
+                "sim", "scanner_default_tag", fallback=self.settings["scanner_default_tag"]
+            )
 
     def save_config(self) -> None:
         cfg = configparser.ConfigParser()
         cfg["sim"] = {
             "sim_speed_cells": str(self.settings["sim_speed_cells"]),
-            "spawn_interval": str(self.settings["spawn_interval"]),
             "grid_gray": str(int(self.settings["grid_gray"])),
+            "induction_poll_interval": str(self.settings["induction_poll_interval"]),
+            "scan_endpoint": str(self.settings["scan_endpoint"]),
+            "scanner_default_tag": str(self.settings["scanner_default_tag"]),
         }
         with CONFIG_PATH.open("w", encoding="utf-8") as f:
             cfg.write(f)
-        self.log("Configuración guardada")
 
     def world_to_screen(self, wx: float, wy: float) -> Tuple[int, int]:
-        sx = int((wx - self.camera_x) * self.zoom)
-        sy = int((wy - self.camera_y) * self.zoom)
-        return sx, sy
+        return int((wx - self.camera_x) * self.zoom), int((wy - self.camera_y) * self.zoom)
 
     def screen_to_world(self, sx: int, sy: int) -> Tuple[float, float]:
-        wx = sx / self.zoom + self.camera_x
-        wy = sy / self.zoom + self.camera_y
-        return wx, wy
+        return sx / self.zoom + self.camera_x, sy / self.zoom + self.camera_y
 
     def world_to_cell(self, wx: float, wy: float) -> Tuple[int, int]:
         return math.floor(wx / CELL_SIZE), math.floor(wy / CELL_SIZE)
@@ -145,9 +174,7 @@ class WarehouseSim:
         return (cell[0] * CELL_SIZE + CELL_SIZE / 2, cell[1] * CELL_SIZE + CELL_SIZE / 2)
 
     def zoom_with_center_anchor(self, factor: float, anchor: Optional[Tuple[int, int]] = None) -> None:
-        if anchor is None:
-            anchor = (WINDOW_W // 2, WINDOW_H // 2)
-
+        anchor = anchor or (WINDOW_W // 2, WINDOW_H // 2)
         old_zoom = self.zoom
         old_wx, old_wy = self.screen_to_world(*anchor)
         self.zoom = max(0.2, min(2.4, old_zoom * factor))
@@ -159,37 +186,32 @@ class WarehouseSim:
         x, y = pos
         if y > WINDOW_H - 78:
             return True
-        if 10 <= x <= 300 and 10 <= y <= 210 and self.show_config:
+        if 10 <= x <= 320 and 10 <= y <= 220 and self.show_config:
             return True
         if WINDOW_W // 2 - 120 <= x <= WINDOW_W // 2 + 200 and 10 <= y <= 54:
             return True
+        if self.context_menu and self.context_menu_rect().collidepoint(pos):
+            return True
         return False
 
-    def element_capacity(self, element: Element) -> int:
-        if element.kind == "induction":
-            return 4
-        return element.capacity
+    def supports_context_menu(self, element: Element) -> bool:
+        return element.kind in {"induction", "belt_input"}
 
-    def spawn_box(self, cell: Tuple[int, int], element: Element) -> None:
+    def element_capacity(self, element: Element) -> int:
+        return 4 if element.kind == "induction" else element.capacity
+
+    def spawn_box(self, cell: Tuple[int, int], element: Element, box_id: str) -> None:
         if len(self.occupants.get(cell, deque())) >= self.element_capacity(element):
             return
         cx, cy = self.cell_center(cell)
         direction = DIRS.get(element.rotation, (1, 0))
-        box = Box(
-            box_id=self.next_box_id,
-            x=cx,
-            y=cy,
-            direction=direction,
-            current_cell=cell,
-            current_element=cell,
-        )
-        self.next_box_id += 1
+        box = Box(box_id=box_id, x=cx, y=cy, direction=direction, current_cell=cell, current_element=cell)
         self.boxes[box.box_id] = box
         self.occupants.setdefault(cell, deque()).append(box.box_id)
         element.fifo.append(box.box_id)
-        self.log(f"Caja {box.box_id} aparece en inducción {cell}")
+        self.log(f"Caja {box.box_id} liberada por inducción {cell}")
 
-    def element_direction(self, cell: Tuple[int, int], element: Element, box: Box) -> Tuple[int, int]:
+    def element_direction(self, element: Element, box: Box) -> Tuple[int, int]:
         if element.kind in ("belt", "belt_input", "induction"):
             return DIRS.get(element.rotation, (1, 0))
         if element.kind == "diverter":
@@ -204,9 +226,7 @@ class WarehouseSim:
     def try_move_box(self, box: Box, dt: float) -> None:
         speed = self.settings["sim_speed_cells"] * CELL_SIZE
         dx, dy = box.direction
-        new_x = box.x + dx * speed * dt
-        new_y = box.y + dy * speed * dt
-
+        new_x, new_y = box.x + dx * speed * dt, box.y + dy * speed * dt
         cur_cell = self.world_to_cell(box.x, box.y)
         next_cell = self.world_to_cell(new_x, new_y)
 
@@ -215,19 +235,10 @@ class WarehouseSim:
             if target_el is not None:
                 occ = self.occupants.setdefault(next_cell, deque())
                 if len(occ) >= self.element_capacity(target_el):
-                    if dx > 0:
-                        box.x = next_cell[0] * CELL_SIZE - 1
-                    elif dx < 0:
-                        box.x = (next_cell[0] + 1) * CELL_SIZE + 1
-                    if dy > 0:
-                        box.y = next_cell[1] * CELL_SIZE - 1
-                    elif dy < 0:
-                        box.y = (next_cell[1] + 1) * CELL_SIZE + 1
                     return
 
             old_element_cell = box.current_element
-            box.x = new_x
-            box.y = new_y
+            box.x, box.y = new_x, new_y
             box.current_cell = next_cell
 
             if old_element_cell != next_cell:
@@ -237,15 +248,13 @@ class WarehouseSim:
                     old_el = self.elements.get(old_element_cell)
                     if old_el is not None and box.box_id in old_el.fifo:
                         old_el.fifo.remove(box.box_id)
-                    self.log(f"Caja {box.box_id} sale de {old_element_cell}")
 
                 if target_el is not None:
                     self.occupants.setdefault(next_cell, deque()).append(box.box_id)
                     target_el.fifo.append(box.box_id)
                     box.current_element = next_cell
-                    self.log(f"Caja {box.box_id} entra en {target_el.kind} {next_cell}")
                     box.pending_turn_cell = next_cell
-                    box.pending_direction = self.element_direction(next_cell, target_el, box)
+                    box.pending_direction = self.element_direction(target_el, box)
                     if target_el.kind != "diverter":
                         box.next_diverter_dir = None
                 else:
@@ -253,26 +262,86 @@ class WarehouseSim:
                     box.pending_turn_cell = None
                     box.pending_direction = None
         else:
-            box.x = new_x
-            box.y = new_y
+            box.x, box.y = new_x, new_y
 
         if box.pending_turn_cell is not None and box.pending_direction is not None:
             center_x, center_y = self.cell_center(box.pending_turn_cell)
             dir_x, dir_y = box.direction
-            crossed_center = False
-            if dir_x > 0:
-                crossed_center = box.x >= center_x
-            elif dir_x < 0:
-                crossed_center = box.x <= center_x
-            elif dir_y > 0:
-                crossed_center = box.y >= center_y
-            elif dir_y < 0:
-                crossed_center = box.y <= center_y
-
+            crossed_center = (dir_x > 0 and box.x >= center_x) or (dir_x < 0 and box.x <= center_x) or (dir_y > 0 and box.y >= center_y) or (dir_y < 0 and box.y <= center_y)
             if crossed_center:
                 box.direction = box.pending_direction
                 box.pending_direction = None
                 box.pending_turn_cell = None
+
+    def get_next_available_box_id(self) -> str:
+        self.mock_box_seq += 1
+        return str(self.mock_box_seq)
+
+    def get_next_tracking_id(self) -> int:
+        self.mock_tracking_seq += 1
+        return self.mock_tracking_seq
+
+    def call_scan_endpoint(self, payload: Dict) -> Tuple[int, Dict]:
+        req = urllib.request.Request(
+            self.settings["scan_endpoint"],
+            method="POST",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                body = resp.read().decode("utf-8") or "{}"
+                return int(resp.status), json.loads(body)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8") or "{}"
+            try:
+                parsed = json.loads(body)
+            except json.JSONDecodeError:
+                parsed = {"message": body}
+            return exc.code, parsed
+        except Exception as exc:  # noqa: BLE001
+            return 500, {"message": f"Sistema no disponible. {exc}"}
+
+    def run_induction_cycle(self, cell: Tuple[int, int], element: Element) -> None:
+        if not element.tag:
+            element.tag = self.settings["scanner_default_tag"]
+
+        if not element.tag:
+            return
+
+        if element.held_box_id is None:
+            box_id = self.get_next_available_box_id()
+            tracking_id = self.get_next_tracking_id()
+            payload = {"scannerId": element.tag, "barcode": box_id, "trackingId": tracking_id}
+            status, body = self.call_scan_endpoint(payload)
+            if status >= 400:
+                self.fail_with_error(element, str(body.get("message", "Sistema no disponible.")))
+                return
+            decision = int(body.get("decision", 0))
+            if decision == 0:
+                element.held_box_id = box_id
+                element.held_tracking_id = tracking_id
+                element.held_decision = decision
+                self.log(f"Inducción {element.tag}: caja {box_id} retenida ({tracking_id})")
+            else:
+                self.spawn_box(cell, element, box_id)
+        else:
+            payload = {
+                "scannerId": element.tag,
+                "trackingId": element.held_tracking_id,
+                "decision": element.held_decision,
+            }
+            status, body = self.call_scan_endpoint(payload)
+            if status >= 400:
+                self.fail_with_error(element, str(body.get("message", "Sistema no disponible.")))
+                return
+            decision = int(body.get("decision", 0))
+            if decision == 99:
+                self.spawn_box(cell, element, element.held_box_id)
+                self.log(f"Inducción {element.tag}: libera caja en espera {element.held_box_id}")
+                element.held_box_id = None
+                element.held_tracking_id = None
+                element.held_decision = None
 
     def update_simulation(self, dt: float) -> None:
         if not self.is_running:
@@ -281,15 +350,13 @@ class WarehouseSim:
         for cell, el in self.elements.items():
             if el.kind == "induction":
                 el.spawn_timer += dt
-                if el.spawn_timer >= self.settings["spawn_interval"]:
+                if el.spawn_timer >= self.settings["induction_poll_interval"]:
                     el.spawn_timer = 0.0
-                    self.spawn_box(cell, el)
+                    self.run_induction_cycle(cell, el)
 
         for box in list(self.boxes.values()):
             self.try_move_box(box, dt)
-
-            bx, by = box.x, box.y
-            if abs(bx) > CELL_SIZE * 200 or abs(by) > CELL_SIZE * 200:
+            if abs(box.x) > CELL_SIZE * 200 or abs(box.y) > CELL_SIZE * 200:
                 if box.current_element in self.occupants and box.box_id in self.occupants[box.current_element]:
                     self.occupants[box.current_element].remove(box.box_id)
                 self.boxes.pop(box.box_id, None)
@@ -298,13 +365,13 @@ class WarehouseSim:
         data = {
             "camera": {"x": self.camera_x, "y": self.camera_y, "zoom": self.zoom},
             "elements": [
-                {"cell": [x, y], "kind": e.kind, "rotation": e.rotation, "capacity": e.capacity}
+                {"cell": [x, y], "kind": e.kind, "rotation": e.rotation, "capacity": e.capacity, "tag": e.tag}
                 for (x, y), e in self.elements.items()
             ],
         }
         with LAYOUT_PATH.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        self.log(f"Layout guardado en {LAYOUT_PATH.name}")
+        self.log("Layout guardado")
 
     def load_layout(self) -> None:
         if not LAYOUT_PATH.exists():
@@ -314,7 +381,6 @@ class WarehouseSim:
         self.elements.clear()
         self.boxes.clear()
         self.occupants.clear()
-
         cam = data.get("camera", {})
         self.camera_x = cam.get("x", self.camera_x)
         self.camera_y = cam.get("y", self.camera_y)
@@ -322,11 +388,12 @@ class WarehouseSim:
 
         for item in data.get("elements", []):
             cell = tuple(item["cell"])
-            kind = item["kind"]
-            rot = int(item.get("rotation", 0)) % 360
-            cap = int(item.get("capacity", 1))
-            self.elements[cell] = Element(kind=kind, rotation=rot, capacity=cap)
-        self.log(f"Layout cargado ({len(self.elements)} elementos)")
+            self.elements[cell] = Element(
+                kind=item["kind"],
+                rotation=int(item.get("rotation", 0)) % 360,
+                capacity=int(item.get("capacity", 1)),
+                tag=item.get("tag"),
+            )
 
     def draw_icon(self, kind: str, rotation: int, alpha: int = 255) -> pygame.Surface:
         surf = pygame.Surface((CELL_SIZE, CELL_SIZE), pygame.SRCALPHA)
@@ -346,7 +413,6 @@ class WarehouseSim:
             pygame.draw.polygon(surf, (WHITE[0], WHITE[1], WHITE[2], a), [(62, 20), (78, 40), (46, 40)], 4)
             pygame.draw.polygon(surf, (WHITE[0], WHITE[1], WHITE[2], a), [(104, 62), (84, 78), (84, 46)], 4)
             pygame.draw.polygon(surf, (WHITE[0], WHITE[1], WHITE[2], a), [(62, 104), (78, 84), (46, 84)], 4)
-
         if rotation:
             surf = pygame.transform.rotate(surf, -rotation)
         return surf
@@ -356,33 +422,29 @@ class WarehouseSim:
         color = (gray, gray, gray)
         world_left, world_top = self.screen_to_world(0, 0)
         world_right, world_bottom = self.screen_to_world(WINDOW_W, WINDOW_H)
-
         sx = math.floor(world_left / CELL_SIZE) * CELL_SIZE
         ex = math.ceil(world_right / CELL_SIZE) * CELL_SIZE
         sy = math.floor(world_top / CELL_SIZE) * CELL_SIZE
         ey = math.ceil(world_bottom / CELL_SIZE) * CELL_SIZE
-
         for x in range(int(sx), int(ex) + 1, CELL_SIZE):
-            p1 = self.world_to_screen(x, sy)
-            p2 = self.world_to_screen(x, ey)
-            pygame.draw.line(self.screen, color, p1, p2, 1)
+            pygame.draw.line(self.screen, color, self.world_to_screen(x, sy), self.world_to_screen(x, ey), 1)
         for y in range(int(sy), int(ey) + 1, CELL_SIZE):
-            p1 = self.world_to_screen(sx, y)
-            p2 = self.world_to_screen(ex, y)
-            pygame.draw.line(self.screen, color, p1, p2, 1)
+            pygame.draw.line(self.screen, color, self.world_to_screen(sx, y), self.world_to_screen(ex, y), 1)
 
     def draw_elements(self) -> None:
         for cell, element in self.elements.items():
-            wx = cell[0] * CELL_SIZE
-            wy = cell[1] * CELL_SIZE
-            sx, sy = self.world_to_screen(wx, wy)
+            sx, sy = self.world_to_screen(cell[0] * CELL_SIZE, cell[1] * CELL_SIZE)
             size = int(CELL_SIZE * self.zoom)
             if size <= 2:
                 continue
-            icon = self.draw_icon(element.kind, element.rotation)
-            icon = pygame.transform.smoothscale(icon, (size, size))
+            icon = pygame.transform.smoothscale(self.draw_icon(element.kind, element.rotation), (size, size))
             self.screen.blit(icon, (sx, sy))
-
+            if element.tag and self.supports_context_menu(element):
+                tag_txt = self.small_font.render(element.tag, True, GREEN)
+                self.screen.blit(tag_txt, (sx + 6, sy + 4))
+            if element.has_error:
+                warn = self.font.render("!", True, RED)
+                self.screen.blit(warn, (sx + size - 16, sy + 2))
             if cell in self.selected_cells:
                 pygame.draw.rect(self.screen, YELLOW, (sx, sy, size, size), 2)
 
@@ -393,39 +455,31 @@ class WarehouseSim:
             rect = pygame.Rect(0, 0, box_size, box_size)
             rect.center = (sx, sy)
             pygame.draw.rect(self.screen, BLUE, rect)
-            tid = self.small_font.render(str(box.box_id), True, (20, 20, 20))
-            rect = tid.get_rect(center=(sx, sy))
-            self.screen.blit(tid, rect)
+            visible = box.box_id[-4:]
+            tid = self.small_font.render(visible, True, (20, 20, 20))
+            self.screen.blit(tid, tid.get_rect(center=(sx, sy)))
 
     def draw_ui(self) -> None:
-        # Top controls
         panel = pygame.Rect(WINDOW_W // 2 - 140, 10, 280, 44)
         pygame.draw.rect(self.screen, (30, 30, 36), panel, border_radius=8)
         pygame.draw.rect(self.screen, (95, 95, 105), panel, 1, border_radius=8)
-
-        play_label = "Pause" if self.is_running else "Play"
         play_rect = pygame.Rect(WINDOW_W // 2 - 120, 16, 92, 32)
         stop_rect = pygame.Rect(WINDOW_W // 2 - 18, 16, 72, 32)
         conf_rect = pygame.Rect(WINDOW_W // 2 + 64, 16, 60, 32)
-
-        for rect, label in [(play_rect, play_label), (stop_rect, "Stop"), (conf_rect, "⚙")]:
+        for rect, label in [(play_rect, "Pause" if self.is_running else "Play"), (stop_rect, "Stop"), (conf_rect, "⚙")]:
             pygame.draw.rect(self.screen, (55, 55, 66), rect, border_radius=6)
             pygame.draw.rect(self.screen, (100, 100, 112), rect, 1, border_radius=6)
             txt = self.font.render(label, True, WHITE)
             self.screen.blit(txt, txt.get_rect(center=rect.center))
 
-        # bottom toolbar
         bar = pygame.Rect(0, WINDOW_H - 78, WINDOW_W, 78)
         pygame.draw.rect(self.screen, (20, 20, 24), bar)
         pygame.draw.line(self.screen, (80, 80, 90), (0, WINDOW_H - 78), (WINDOW_W, WINDOW_H - 78), 1)
-
         x = 16
-        y = WINDOW_H - 66
         for key, label in self.toolbar_buttons:
-            rect = pygame.Rect(x, y, 150, 48)
+            rect = pygame.Rect(x, WINDOW_H - 66, 150, 48)
             active = (self.place_kind == key and self.mode == "placing") or (key == "eraser" and self.mode == "eraser")
-            color = (74, 95, 125) if active else (52, 52, 62)
-            pygame.draw.rect(self.screen, color, rect, border_radius=8)
+            pygame.draw.rect(self.screen, (74, 95, 125) if active else (52, 52, 62), rect, border_radius=8)
             pygame.draw.rect(self.screen, (108, 108, 120), rect, 1, border_radius=8)
             txt = self.small_font.render(label, True, WHITE)
             self.screen.blit(txt, txt.get_rect(center=rect.center))
@@ -433,75 +487,130 @@ class WarehouseSim:
 
         if self.mode == "placing" and self.place_kind:
             msg = f"Instanciando {self.place_kind}. ESC cancela | Click derecho rota"
-            line = self.small_font.render(msg, True, WHITE)
-            self.screen.blit(line, (16, WINDOW_H - 96))
-        elif self.mode == "eraser":
-            line = self.small_font.render("Modo borrador. Arrastra click izq para eliminar. ESC para salir.", True, WHITE)
-            self.screen.blit(line, (16, WINDOW_H - 96))
+            self.screen.blit(self.small_font.render(msg, True, WHITE), (16, WINDOW_H - 96))
 
         if self.show_config:
-            cpanel = pygame.Rect(10, 10, 300, 210)
+            cpanel = pygame.Rect(10, 10, 320, 220)
             pygame.draw.rect(self.screen, (25, 25, 30), cpanel, border_radius=8)
             pygame.draw.rect(self.screen, (100, 100, 110), cpanel, 1, border_radius=8)
-            title = self.font.render("Configuración", True, WHITE)
-            self.screen.blit(title, (24, 20))
+            self.screen.blit(self.font.render("Configuración", True, WHITE), (24, 20))
             self.draw_config_row("Velocidad", self.settings["sim_speed_cells"], 56)
-            self.draw_config_row("Spawn", self.settings["spawn_interval"], 106)
+            self.draw_config_row("Poll inducción", self.settings["induction_poll_interval"], 106)
             self.draw_config_row("Grid gray", self.settings["grid_gray"], 156)
+
+        if self.error_message:
+            err_txt = self.small_font.render(self.error_message, True, RED)
+            self.screen.blit(err_txt, (WINDOW_W - 520, 38))
 
         log_y = 60
         for item in list(self.logs)[:7]:
-            txt = self.small_font.render(item, True, (180, 180, 180))
-            self.screen.blit(txt, (WINDOW_W - 450, log_y))
+            self.screen.blit(self.small_font.render(item, True, (180, 180, 180)), (WINDOW_W - 520, log_y))
             log_y += 18
+
+        self.draw_context_menu()
 
     def draw_config_row(self, label: str, value: float, y: int) -> None:
         text = self.small_font.render(f"{label}: {value:.2f}" if isinstance(value, float) else f"{label}: {value}", True, WHITE)
         self.screen.blit(text, (24, y))
-        minus = pygame.Rect(210, y - 4, 34, 26)
-        plus = pygame.Rect(252, y - 4, 34, 26)
+        minus, plus = pygame.Rect(230, y - 4, 34, 26), pygame.Rect(272, y - 4, 34, 26)
         for rect, char in [(minus, "-"), (plus, "+")]:
             pygame.draw.rect(self.screen, (60, 60, 70), rect, border_radius=5)
             pygame.draw.rect(self.screen, (98, 98, 108), rect, 1, border_radius=5)
-            t = self.font.render(char, True, WHITE)
-            self.screen.blit(t, t.get_rect(center=rect.center))
+            self.screen.blit(self.font.render(char, True, WHITE), self.font.render(char, True, WHITE).get_rect(center=rect.center))
+
+    def context_menu_rect(self) -> pygame.Rect:
+        if not self.context_menu:
+            return pygame.Rect(0, 0, 0, 0)
+        x, y = self.context_menu.screen_pos
+        return pygame.Rect(x, y, 260, 110)
+
+    def draw_context_menu(self) -> None:
+        if not self.context_menu:
+            return
+        rect = self.context_menu_rect()
+        pygame.draw.rect(self.screen, (28, 28, 34), rect, border_radius=6)
+        pygame.draw.rect(self.screen, (110, 110, 120), rect, 1, border_radius=6)
+        if self.context_menu.menu_type == "element":
+            self.screen.blit(self.small_font.render("Tag", True, WHITE), (rect.x + 12, rect.y + 10))
+            input_rect = pygame.Rect(rect.x + 12, rect.y + 32, 236, 28)
+            pygame.draw.rect(self.screen, (40, 40, 50), input_rect, border_radius=4)
+            pygame.draw.rect(self.screen, (140, 140, 155), input_rect, 1, border_radius=4)
+            self.screen.blit(self.small_font.render(self.tag_input_value or "(vacío)", True, WHITE), (input_rect.x + 8, input_rect.y + 6))
+            self.screen.blit(self.small_font.render("Enter guardar / Backspace borrar", True, (170, 170, 180)), (rect.x + 12, rect.y + 70))
+        elif self.context_menu.menu_type == "box":
+            self.screen.blit(self.small_font.render("Caja", True, WHITE), (rect.x + 12, rect.y + 10))
+            self.screen.blit(self.small_font.render(self.context_menu.box_id or "", True, BLUE), (rect.x + 12, rect.y + 36))
 
     def draw_selection_rect(self) -> None:
         if self.select_drag:
             x1, y1 = self.select_start
             x2, y2 = self.select_end
-            rect = pygame.Rect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
-            pygame.draw.rect(self.screen, (130, 170, 230), rect, 1)
+            pygame.draw.rect(self.screen, (130, 170, 230), pygame.Rect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)), 1)
 
     def draw_ghost(self) -> None:
         if self.mode != "placing" or not self.place_kind or self.place_kind in {"save", "load", "eraser"}:
             return
-        mx, my = pygame.mouse.get_pos()
-        wx, wy = self.screen_to_world(mx, my)
+        wx, wy = self.screen_to_world(*pygame.mouse.get_pos())
         cell = self.world_to_cell(wx, wy)
-        world_x = cell[0] * CELL_SIZE
-        world_y = cell[1] * CELL_SIZE
-        sx, sy = self.world_to_screen(world_x, world_y)
+        sx, sy = self.world_to_screen(cell[0] * CELL_SIZE, cell[1] * CELL_SIZE)
         size = int(CELL_SIZE * self.zoom)
         if size <= 2:
             return
-        icon = self.draw_icon(self.place_kind, self.place_rotation, alpha=140)
-        icon = pygame.transform.smoothscale(icon, (size, size))
+        icon = pygame.transform.smoothscale(self.draw_icon(self.place_kind, self.place_rotation, alpha=140), (size, size))
         self.screen.blit(icon, (sx, sy))
 
     def clear_boxes(self) -> None:
         self.boxes.clear()
         self.occupants.clear()
+        self.error_message = None
         for e in self.elements.values():
             e.fifo.clear()
-        self.log("Stop: cajas eliminadas")
+            e.held_box_id = None
+            e.held_tracking_id = None
+            e.held_decision = None
+            e.has_error = False
+
+    def box_at_screen(self, pos: Tuple[int, int]) -> Optional[Box]:
+        box_size = max(6, int(110 * self.zoom))
+        for box in self.boxes.values():
+            sx, sy = self.world_to_screen(box.x, box.y)
+            rect = pygame.Rect(0, 0, box_size, box_size)
+            rect.center = (sx, sy)
+            if rect.collidepoint(pos):
+                return box
+        return None
+
+    def element_tag_is_unique(self, tag: str, current_cell: Tuple[int, int]) -> bool:
+        for cell, element in self.elements.items():
+            if cell != current_cell and element.tag and element.tag.lower() == tag.lower():
+                return False
+        return True
+
+    def save_context_tag(self) -> None:
+        if not self.context_menu or self.context_menu.menu_type != "element" or not self.context_menu.cell:
+            return
+        element = self.elements.get(self.context_menu.cell)
+        if not element:
+            return
+        value = self.tag_input_value.strip()
+        if not value:
+            element.tag = None
+            self.log("Tag eliminado")
+            self.context_menu = None
+            return
+        if not self.element_tag_is_unique(value, self.context_menu.cell):
+            self.log("Tag duplicado: debe ser único")
+            return
+        element.tag = value
+        self.log(f"Tag guardado: {value}")
+        self.context_menu = None
 
     def handle_toolbar_click(self, pos: Tuple[int, int]) -> bool:
         x = 16
-        y = WINDOW_H - 66
         for key, _label in self.toolbar_buttons:
-            rect = pygame.Rect(x, y, 150, 48)
+            rect = pygame.Rect(x, WINDOW_H - 66, 150, 48)
             if rect.collidepoint(pos):
+                self.context_menu = None
                 if key in {"induction", "belt", "belt_input", "diverter"}:
                     self.mode = "placing"
                     self.place_kind = key
@@ -522,15 +631,10 @@ class WarehouseSim:
     def modify_config(self, pos: Tuple[int, int]) -> bool:
         if not self.show_config:
             return False
+        rows = [(56, "sim_speed_cells", 0.1), (106, "induction_poll_interval", 0.5), (156, "grid_gray", 3)]
         x, y = pos
-        rows = [
-            (56, "sim_speed_cells", 0.1),
-            (106, "spawn_interval", 0.1),
-            (156, "grid_gray", 3),
-        ]
         for ry, key, step in rows:
-            minus = pygame.Rect(210, ry - 4, 34, 26)
-            plus = pygame.Rect(252, ry - 4, 34, 26)
+            minus, plus = pygame.Rect(230, ry - 4, 34, 26), pygame.Rect(272, ry - 4, 34, 26)
             if minus.collidepoint((x, y)):
                 self.settings[key] = max(0.1 if key != "grid_gray" else 20, self.settings[key] - step)
                 if key == "grid_gray":
@@ -538,8 +642,7 @@ class WarehouseSim:
                 self.save_config()
                 return True
             if plus.collidepoint((x, y)):
-                limit = 220 if key == "grid_gray" else 8.0
-                self.settings[key] = min(limit, self.settings[key] + step)
+                self.settings[key] = min(220 if key == "grid_gray" else 20.0, self.settings[key] + step)
                 if key == "grid_gray":
                     self.settings[key] = int(self.settings[key])
                 self.save_config()
@@ -550,7 +653,6 @@ class WarehouseSim:
         pos = event.pos
         if self.handle_toolbar_click(pos):
             return
-
         play_rect = pygame.Rect(WINDOW_W // 2 - 120, 16, 92, 32)
         stop_rect = pygame.Rect(WINDOW_W // 2 - 18, 16, 72, 32)
         conf_rect = pygame.Rect(WINDOW_W // 2 + 64, 16, 60, 32)
@@ -570,29 +672,38 @@ class WarehouseSim:
 
         if self.mode == "placing" and self.place_kind:
             if event.button == 1:
-                wx, wy = self.screen_to_world(*pos)
-                cell = self.world_to_cell(wx, wy)
+                cell = self.world_to_cell(*self.screen_to_world(*pos))
                 self.elements[cell] = Element(kind=self.place_kind, rotation=self.place_rotation)
             elif event.button == 3:
                 self.place_rotation = (self.place_rotation + 90) % 360
             return
 
-        if self.mode == "eraser":
-            if event.button == 1:
-                self.eraser_drag = True
-                wx, wy = self.screen_to_world(*pos)
-                cell = self.world_to_cell(wx, wy)
-                self.elements.pop(cell, None)
+        if self.mode == "eraser" and event.button == 1:
+            self.eraser_drag = True
+            cell = self.world_to_cell(*self.screen_to_world(*pos))
+            self.elements.pop(cell, None)
             return
 
         if self.mode == "idle":
-            if event.button == 1 and not self.click_over_ui(pos):
+            if event.button == 3 and not self.click_over_ui(pos):
+                box = self.box_at_screen(pos)
+                if box:
+                    self.context_menu = ContextMenu(menu_type="box", box_id=box.box_id, screen_pos=pos)
+                    return
+                cell = self.world_to_cell(*self.screen_to_world(*pos))
+                element = self.elements.get(cell)
+                if element and self.supports_context_menu(element):
+                    self.context_menu = ContextMenu(menu_type="element", cell=cell, screen_pos=pos)
+                    self.tag_input_value = element.tag or ""
+                    return
+                self.context_menu = None
+                self.pan_drag = True
+                self.pan_prev = pos
+            elif event.button == 1 and not self.click_over_ui(pos):
+                self.context_menu = None
                 self.select_drag = True
                 self.select_start = pos
                 self.select_end = pos
-            elif event.button == 3 and not self.click_over_ui(pos):
-                self.pan_drag = True
-                self.pan_prev = pos
 
     def handle_mouse_up(self, event: pygame.event.Event) -> None:
         if event.button == 1:
@@ -602,39 +713,29 @@ class WarehouseSim:
                 rect = pygame.Rect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
                 self.selected_cells.clear()
                 if rect.w < 5 and rect.h < 5:
-                    wx, wy = self.screen_to_world(*event.pos)
-                    cell = self.world_to_cell(wx, wy)
+                    cell = self.world_to_cell(*self.screen_to_world(*event.pos))
                     if cell in self.elements:
                         self.selected_cells.add(cell)
                 else:
                     for cell in self.elements:
-                        wx = cell[0] * CELL_SIZE
-                        wy = cell[1] * CELL_SIZE
-                        sx, sy = self.world_to_screen(wx, wy)
+                        sx, sy = self.world_to_screen(cell[0] * CELL_SIZE, cell[1] * CELL_SIZE)
                         size = int(CELL_SIZE * self.zoom)
-                        erec = pygame.Rect(sx, sy, size, size)
-                        if rect.colliderect(erec):
+                        if rect.colliderect(pygame.Rect(sx, sy, size, size)):
                             self.selected_cells.add(cell)
             self.select_drag = False
             self.eraser_drag = False
-
         if event.button == 3:
             self.pan_drag = False
 
     def handle_mouse_motion(self, event: pygame.event.Event) -> None:
         if self.pan_drag:
-            dx = event.pos[0] - self.pan_prev[0]
-            dy = event.pos[1] - self.pan_prev[1]
-            self.camera_x -= dx / self.zoom
-            self.camera_y -= dy / self.zoom
+            self.camera_x -= (event.pos[0] - self.pan_prev[0]) / self.zoom
+            self.camera_y -= (event.pos[1] - self.pan_prev[1]) / self.zoom
             self.pan_prev = event.pos
-
         if self.select_drag:
             self.select_end = event.pos
-
         if self.mode == "eraser" and self.eraser_drag:
-            wx, wy = self.screen_to_world(*event.pos)
-            cell = self.world_to_cell(wx, wy)
+            cell = self.world_to_cell(*self.screen_to_world(*event.pos))
             self.elements.pop(cell, None)
 
     def handle_events(self) -> bool:
@@ -642,10 +743,24 @@ class WarehouseSim:
             if event.type == pygame.QUIT:
                 return False
             if event.type == pygame.KEYDOWN:
+                if self.context_menu and self.context_menu.menu_type == "element":
+                    if event.key == pygame.K_RETURN:
+                        self.save_context_tag()
+                        continue
+                    if event.key == pygame.K_ESCAPE:
+                        self.context_menu = None
+                        continue
+                    if event.key == pygame.K_BACKSPACE:
+                        self.tag_input_value = self.tag_input_value[:-1]
+                        continue
+                    if event.unicode and event.unicode.isprintable() and len(self.tag_input_value) < 20:
+                        self.tag_input_value += event.unicode
+                        continue
                 if event.key == pygame.K_ESCAPE:
                     self.mode = "idle"
                     self.place_kind = None
                     self.eraser_drag = False
+                    self.context_menu = None
                 if event.key == pygame.K_s and (event.mod & pygame.KMOD_CTRL):
                     self.save_layout()
                 if event.key == pygame.K_o and (event.mod & pygame.KMOD_CTRL):
@@ -669,7 +784,6 @@ class WarehouseSim:
             dt = self.clock.tick(60) / 1000.0
             running = self.handle_events()
             self.update_simulation(dt)
-
             self.screen.fill(BG_COLOR)
             self.draw_grid()
             self.draw_elements()
@@ -678,7 +792,6 @@ class WarehouseSim:
             self.draw_selection_rect()
             self.draw_ui()
             pygame.display.flip()
-
         pygame.quit()
 
 
