@@ -66,6 +66,29 @@ Desde `warehouse_sim/`, ejecutar `run_sim.bat`. El script:
 
 ## Integración logística (primera versión)
 
+## Integración Oracle (idCaja y trackingId)
+
+Se añadió un proveedor de IDs desacoplado en `warehouse_sim/services/`:
+
+- `oracle_id_provider.py`: acceso a Oracle para obtener `idCaja` y `trackingId`.
+- `sequence_id_provider.py`: fallback local cuando Oracle está desactivado.
+
+Configuración en `warehouse_sim/config.ini` (sección `[sim]`):
+
+- `oracle_enabled`: `true` para activar Oracle.
+- `oracle_host`: host de la BBDD.
+- `oracle_port`: puerto (habitualmente `1521`).
+- `oracle_sid`: SID Oracle.
+- `oracle_user`: usuario.
+- `oracle_password`: contraseña.
+- `oracle_box_id_query`: SQL para obtener el siguiente `idCaja`.
+- `oracle_tracking_id_query`: SQL para obtener el siguiente `trackingId`.
+
+Por defecto se usan:
+
+- `SELECT VM_BOX_ID_SEQ.NEXTVAL FROM dual`
+- `SELECT VM_TRACKING_ID_SEQ.NEXTVAL FROM dual`
+
 - La inducción ya no genera cajas por temporizador local: hace polling cada `induction_poll_interval` segundos.
 - Cada inducción usa su `tag` (scannerId) y llama al endpoint `scan_endpoint`.
 - Estado de inductor:

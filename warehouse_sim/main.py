@@ -10,6 +10,9 @@ from typing import Dict, Optional, Tuple
 
 import pygame
 
+from services.oracle_id_provider import OracleConnectionConfig, OracleIdProvider, OracleQueryConfig
+from services.sequence_id_provider import SequenceIdProvider
+
 CELL_SIZE = 124
 WINDOW_W, WINDOW_H = 1400, 900
 BG_COLOR = (8, 8, 10)
@@ -84,8 +87,6 @@ class WarehouseSim:
         self.occupants: Dict[Tuple[int, int], deque] = {}
         self.logs: deque = deque(maxlen=8)
         self.error_message: Optional[str] = None
-        self.mock_box_seq = 1000000000
-        self.mock_tracking_seq = 250
 
         self.mode = "idle"
         self.place_kind: Optional[str] = None
@@ -107,8 +108,17 @@ class WarehouseSim:
             "induction_poll_interval": 5.0,
             "scan_endpoint": "http://vpn.v10.solutions:18080/ords/merza/merza/scan",
             "scanner_default_tag": "SCAN01",
+            "oracle_enabled": False,
+            "oracle_host": "localhost",
+            "oracle_port": 1521,
+            "oracle_sid": "ORCL",
+            "oracle_user": "",
+            "oracle_password": "",
+            "oracle_box_id_query": "SELECT VM_BOX_ID_SEQ.NEXTVAL FROM dual",
+            "oracle_tracking_id_query": "SELECT VM_TRACKING_ID_SEQ.NEXTVAL FROM dual",
         }
         self.load_config()
+        self.id_provider = self.build_id_provider()
 
         self.toolbar_buttons = [
             ("induction", "Inducción"),
@@ -148,6 +158,16 @@ class WarehouseSim:
             self.settings["scanner_default_tag"] = cfg.get(
                 "sim", "scanner_default_tag", fallback=self.settings["scanner_default_tag"]
             )
+            self.settings["oracle_enabled"] = cfg.getboolean("sim", "oracle_enabled", fallback=self.settings["oracle_enabled"])
+            self.settings["oracle_host"] = cfg.get("sim", "oracle_host", fallback=self.settings["oracle_host"])
+            self.settings["oracle_port"] = cfg.getint("sim", "oracle_port", fallback=self.settings["oracle_port"])
+            self.settings["oracle_sid"] = cfg.get("sim", "oracle_sid", fallback=self.settings["oracle_sid"])
+            self.settings["oracle_user"] = cfg.get("sim", "oracle_user", fallback=self.settings["oracle_user"])
+            self.settings["oracle_password"] = cfg.get("sim", "oracle_password", fallback=self.settings["oracle_password"])
+            self.settings["oracle_box_id_query"] = cfg.get("sim", "oracle_box_id_query", fallback=self.settings["oracle_box_id_query"])
+            self.settings["oracle_tracking_id_query"] = cfg.get(
+                "sim", "oracle_tracking_id_query", fallback=self.settings["oracle_tracking_id_query"]
+            )
 
     def save_config(self) -> None:
         cfg = configparser.ConfigParser()
@@ -157,6 +177,14 @@ class WarehouseSim:
             "induction_poll_interval": str(self.settings["induction_poll_interval"]),
             "scan_endpoint": str(self.settings["scan_endpoint"]),
             "scanner_default_tag": str(self.settings["scanner_default_tag"]),
+            "oracle_enabled": str(bool(self.settings["oracle_enabled"])).lower(),
+            "oracle_host": str(self.settings["oracle_host"]),
+            "oracle_port": str(int(self.settings["oracle_port"])),
+            "oracle_sid": str(self.settings["oracle_sid"]),
+            "oracle_user": str(self.settings["oracle_user"]),
+            "oracle_password": str(self.settings["oracle_password"]),
+            "oracle_box_id_query": str(self.settings["oracle_box_id_query"]),
+            "oracle_tracking_id_query": str(self.settings["oracle_tracking_id_query"]),
         }
         with CONFIG_PATH.open("w", encoding="utf-8") as f:
             cfg.write(f)
@@ -273,13 +301,27 @@ class WarehouseSim:
                 box.pending_direction = None
                 box.pending_turn_cell = None
 
+    def build_id_provider(self):
+        if not self.settings["oracle_enabled"]:
+            return SequenceIdProvider()
+        conn = OracleConnectionConfig(
+            host=self.settings["oracle_host"],
+            port=int(self.settings["oracle_port"]),
+            sid=self.settings["oracle_sid"],
+            user=self.settings["oracle_user"],
+            password=self.settings["oracle_password"],
+        )
+        queries = OracleQueryConfig(
+            box_id_query=self.settings["oracle_box_id_query"],
+            tracking_id_query=self.settings["oracle_tracking_id_query"],
+        )
+        return OracleIdProvider(conn, queries)
+
     def get_next_available_box_id(self) -> str:
-        self.mock_box_seq += 1
-        return str(self.mock_box_seq)
+        return self.id_provider.get_next_box_id()
 
     def get_next_tracking_id(self) -> int:
-        self.mock_tracking_seq += 1
-        return self.mock_tracking_seq
+        return self.id_provider.get_next_tracking_id()
 
     def call_scan_endpoint(self, payload: Dict) -> Tuple[int, Dict]:
         req = urllib.request.Request(
@@ -310,8 +352,12 @@ class WarehouseSim:
             return
 
         if element.held_box_id is None:
-            box_id = self.get_next_available_box_id()
-            tracking_id = self.get_next_tracking_id()
+            try:
+                box_id = self.get_next_available_box_id()
+                tracking_id = self.get_next_tracking_id()
+            except Exception as exc:  # noqa: BLE001
+                self.fail_with_error(element, f"Error consultando Oracle: {exc}")
+                return
             payload = {"scannerId": element.tag, "barcode": box_id, "trackingId": tracking_id}
             status, body = self.call_scan_endpoint(payload)
             if status >= 400:
