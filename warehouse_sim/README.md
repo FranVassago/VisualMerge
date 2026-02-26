@@ -13,6 +13,16 @@ Primer prototipo de simulador de almacén desktop (sin navegador) basado en `pyg
 python warehouse_sim/main.py
 ```
 
+## Ejecución en Windows (.bat)
+
+Desde `warehouse_sim/`, ejecutar `run_sim.bat`. El script:
+
+- crea `.venv` si no existe
+- activa el entorno
+- instala/actualiza `pip` solo si falta
+- instala `pygame` solo si falta
+- arranca con `py main.py`
+
 ## Controles
 
 - **Botón derecho + arrastrar**: mover cámara (modo idle)
@@ -26,10 +36,10 @@ python warehouse_sim/main.py
 - **Modo instanciación**:
   - `Esc`: cancelar
   - Click derecho: rotar 90°
-  - Click izquierdo: instanciar y volver a modo idle
+  - Click izquierdo: instanciar (permanece en modo instanciación para colocar varios)
 - **Arriba**:
   - `Play/Pause`
-  - `Stop`: elimina todas las cajas en circulación
+  - `Stop`: elimina todas las cajas en circulación y deja la simulación en pausa
   - `⚙`: abre configuración
 - **Config panel**:
   - velocidad de simulación
