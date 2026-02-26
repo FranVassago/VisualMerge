@@ -43,7 +43,7 @@ Desde `warehouse_sim/`, ejecutar `run_sim.bat`. El script:
   - `⚙`: abre configuración
 - **Config panel**:
   - velocidad de simulación
-  - intervalo de spawn en inducción
+  - intervalo de polling en inducción para consulta al gestor
   - gris del grid
   - se guarda en `config.ini`
 
@@ -62,3 +62,19 @@ Desde `warehouse_sim/`, ejecutar `run_sim.bat`. El script:
 - `warehouse_sim/layout.json`: layout del almacén (elementos + cámara)
 - `warehouse_sim/config.ini`: parámetros de simulación/UI
 
+
+
+## Integración logística (primera versión)
+
+- La inducción ya no genera cajas por temporizador local: hace polling cada `induction_poll_interval` segundos.
+- Cada inducción usa su `tag` (scannerId) y llama al endpoint `scan_endpoint`.
+- Estado de inductor:
+  - **Sin caja**: consulta siguiente caja/tracking y envía `scannerId + barcode + trackingId`.
+  - **Con caja en espera**: reintenta con `scannerId + trackingId + decision`.
+- Si la decisión devuelta es `0`, la caja queda retenida en el inductor.
+- Si la decisión devuelta es `99`, la caja se libera al circuito.
+- Códigos `>=400` detienen la simulación, muestran mensaje rojo (truncado) y marcan el elemento con exclamación roja.
+- Click derecho en modo normal:
+  - sobre **induction** o **belt_input**: panel contextual para editar Tag (único).
+  - sobre una caja: panel contextual con ID completo de la caja.
+- Las cajas muestran solo los 4 últimos caracteres del ID en la vista principal.
