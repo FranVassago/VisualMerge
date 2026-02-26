@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+import oracledb
+
+
+@dataclass
+class OracleConnectionConfig:
+    host: str
+    port: int
+    sid: str
+    user: str
+    password: str
+
+
+@dataclass
+class OracleQueryConfig:
+    box_id_query: str
+    tracking_id_query: str
+
+
+class OracleIdProvider:
+    """Obtiene idCaja y trackingId desde Oracle."""
+
+    def __init__(self, connection: OracleConnectionConfig, queries: OracleQueryConfig) -> None:
+        self.connection = connection
+        self.queries = queries
+
+    def get_next_box_id(self) -> str:
+        value = self._fetch_single_value(self.queries.box_id_query)
+        return str(value)
+
+    def get_next_tracking_id(self) -> int:
+        value = self._fetch_single_value(self.queries.tracking_id_query)
+        return int(value)
+
+    def _fetch_single_value(self, query: str) -> Optional[str]:
+        dsn = oracledb.makedsn(self.connection.host, self.connection.port, sid=self.connection.sid)
+        with oracledb.connect(user=self.connection.user, password=self.connection.password, dsn=dsn) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query)
+                row = cursor.fetchone()
+                if row is None:
+                    raise ValueError(f"La consulta no devolvió resultados: {query}")
+                return row[0]
