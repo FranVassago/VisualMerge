@@ -122,7 +122,7 @@ class SimulationEngine:
             self.settings["scan_endpoint"],
             method="POST",
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "APPLICATION/JSON"},
+            headers={"Content-Type": "application/json"},
         )
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:

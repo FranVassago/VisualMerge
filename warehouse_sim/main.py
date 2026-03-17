@@ -56,6 +56,11 @@ class WarehouseSim:
         self.eraser_drag = False
 
         self.show_config = False
+        self.config_manager = ConfigManager(CONFIG_PATH)
+        self.layout_store = LayoutStore(LAYOUT_PATH)
+        self.settings = self.config_manager.load(dict(DEFAULT_SETTINGS))
+        self.id_provider = self.config_manager.build_id_provider(self.settings)
+        self.logger = build_logger()
         self.simulation_engine = SimulationEngine(
             elements=self.elements,
             boxes=self.boxes,
