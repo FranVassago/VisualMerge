@@ -14,12 +14,19 @@ from core.simulation_engine import SimulationEngine
 from core.viewport import Viewport
 
 CONFIG_PATH = Path(__file__).parent / "config.ini"
+DB_CONFIG_PATH = Path(__file__).parent / "db_config.ini"
 LAYOUT_PATH = Path(__file__).parent / "layout.json"
 
 
 
 class WarehouseSim:
     def __init__(self) -> None:
+        self.logger = build_logger()
+        self.config_manager = ConfigManager(CONFIG_PATH, DB_CONFIG_PATH)
+        self.layout_store = LayoutStore(LAYOUT_PATH)
+        self.settings = self.config_manager.load(dict(DEFAULT_SETTINGS))
+        self.id_provider = self.config_manager.build_id_provider(self.settings)
+
         pygame.init()
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         pygame.display.set_caption("Warehouse Simulator Prototype")

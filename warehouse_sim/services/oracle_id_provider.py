@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-import oracledb
-
 from core.logging_utils import build_logger
 
 
@@ -31,6 +29,19 @@ class OracleIdProvider:
         self.queries = queries
         self.logger = build_logger()
 
+    def validate_connection(self) -> None:
+        import oracledb
+
+        dsn = oracledb.makedsn(self.connection.host, self.connection.port, sid=self.connection.sid)
+        try:
+            with oracledb.connect(user=self.connection.user, password=self.connection.password, dsn=dsn) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1 FROM DUAL")
+                    cursor.fetchone()
+        except Exception:
+            self.logger.exception("Oracle connection validation failed")
+            raise ValueError("No se pudo establecer conexión con Oracle usando la configuración indicada")
+
     def get_next_box_id(self) -> str:
         value = self._fetch_single_value(self.queries.box_id_query)
         return str(value)
@@ -40,6 +51,8 @@ class OracleIdProvider:
         return int(value)
 
     def _fetch_single_value(self, query: str) -> Optional[str]:
+        import oracledb
+
         dsn = oracledb.makedsn(self.connection.host, self.connection.port, sid=self.connection.sid)
         try:
             with oracledb.connect(user=self.connection.user, password=self.connection.password, dsn=dsn) as conn:

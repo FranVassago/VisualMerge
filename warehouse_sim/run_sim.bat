@@ -23,6 +23,13 @@ if errorlevel 1 (
   echo pygame ya instalado, se omite instalacion.
 )
 
+python -m pip show oracledb >nul 2>&1
+if errorlevel 1 (
+  python -m pip install oracledb
+) else (
+  echo oracledb ya instalado, se omite instalacion.
+)
+
 py main.py
 
 endlocal
