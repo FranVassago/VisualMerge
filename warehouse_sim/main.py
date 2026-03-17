@@ -1,7 +1,4 @@
-import json
 import math
-import urllib.error
-import urllib.request
 from collections import deque
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -9,27 +6,18 @@ from typing import Dict, Optional, Tuple
 import pygame
 
 from core.config_manager import ConfigManager, DEFAULT_SETTINGS
+from core.constants import BG_COLOR, BLUE, CELL_SIZE, GREEN, RED, WHITE, WINDOW_H, WINDOW_W, YELLOW
+from core.layout_store import LayoutStore
 from core.logging_utils import build_logger
 from core.models import Box, ContextMenu, Element
-
-CELL_SIZE = 124
-WINDOW_W, WINDOW_H = 1400, 900
-BG_COLOR = (8, 8, 10)
-WHITE = (235, 235, 235)
-GREEN = (122, 199, 76)
-YELLOW = (235, 196, 64)
-RED = (218, 88, 88)
-BLUE = (93, 164, 222)
+from core.simulation_engine import SimulationEngine
+from core.viewport import Viewport
 
 CONFIG_PATH = Path(__file__).parent / "config.ini"
 LAYOUT_PATH = Path(__file__).parent / "layout.json"
 
-DIRS = {
-    0: (1, 0),
-    90: (0, 1),
-    180: (-1, 0),
-    270: (0, -1),
-}
+
+
 class WarehouseSim:
     def __init__(self) -> None:
         pygame.init()
@@ -39,9 +27,7 @@ class WarehouseSim:
         self.font = pygame.font.SysFont("consolas", 18)
         self.small_font = pygame.font.SysFont("consolas", 14)
 
-        self.camera_x = -WINDOW_W // 2
-        self.camera_y = -WINDOW_H // 2
-        self.zoom = 0.45
+        self.viewport = Viewport(camera_x=-WINDOW_W // 2, camera_y=-WINDOW_H // 2, zoom=0.45)
 
         self.elements: Dict[Tuple[int, int], Element] = {}
         self.boxes: Dict[str, Box] = {}
@@ -64,9 +50,23 @@ class WarehouseSim:
 
         self.show_config = False
         self.config_manager = ConfigManager(CONFIG_PATH)
+        self.layout_store = LayoutStore(LAYOUT_PATH)
         self.settings = self.config_manager.load(dict(DEFAULT_SETTINGS))
         self.id_provider = self.config_manager.build_id_provider(self.settings)
         self.logger = build_logger()
+        self.simulation_engine = SimulationEngine(
+            elements=self.elements,
+            boxes=self.boxes,
+            occupants=self.occupants,
+            settings=self.settings,
+            logger=self.logger,
+            world_to_cell=self.world_to_cell,
+            cell_center=self.cell_center,
+            next_box_id=self.get_next_available_box_id,
+            next_tracking_id=self.get_next_tracking_id,
+            on_log=self.log,
+            on_error=self.fail_with_error,
+        )
 
         self.toolbar_buttons = [
             ("induction", "Inducción"),
@@ -94,30 +94,26 @@ class WarehouseSim:
     def load_config(self) -> None:
         self.settings = self.config_manager.load(self.settings)
         self.id_provider = self.config_manager.build_id_provider(self.settings)
+        self.simulation_engine.settings = self.settings
 
     def save_config(self) -> None:
         self.config_manager.save(self.settings)
 
     def world_to_screen(self, wx: float, wy: float) -> Tuple[int, int]:
-        return int((wx - self.camera_x) * self.zoom), int((wy - self.camera_y) * self.zoom)
+        return self.viewport.world_to_screen(wx, wy)
 
     def screen_to_world(self, sx: int, sy: int) -> Tuple[float, float]:
-        return sx / self.zoom + self.camera_x, sy / self.zoom + self.camera_y
+        return self.viewport.screen_to_world(sx, sy)
 
     def world_to_cell(self, wx: float, wy: float) -> Tuple[int, int]:
-        return math.floor(wx / CELL_SIZE), math.floor(wy / CELL_SIZE)
+        return self.viewport.world_to_cell(wx, wy)
 
     def cell_center(self, cell: Tuple[int, int]) -> Tuple[float, float]:
-        return (cell[0] * CELL_SIZE + CELL_SIZE / 2, cell[1] * CELL_SIZE + CELL_SIZE / 2)
+        return self.viewport.cell_center(cell)
 
     def zoom_with_center_anchor(self, factor: float, anchor: Optional[Tuple[int, int]] = None) -> None:
         anchor = anchor or (WINDOW_W // 2, WINDOW_H // 2)
-        old_zoom = self.zoom
-        old_wx, old_wy = self.screen_to_world(*anchor)
-        self.zoom = max(0.2, min(2.4, old_zoom * factor))
-        new_wx, new_wy = self.screen_to_world(*anchor)
-        self.camera_x += old_wx - new_wx
-        self.camera_y += old_wy - new_wy
+        self.viewport.zoom_with_center_anchor(factor, anchor)
 
     def click_over_ui(self, pos: Tuple[int, int]) -> bool:
         x, y = pos
@@ -135,80 +131,13 @@ class WarehouseSim:
         return element.kind in {"induction", "belt_input"}
 
     def element_capacity(self, element: Element) -> int:
-        return 4 if element.kind == "induction" else element.capacity
+        return self.simulation_engine.element_capacity(element)
 
     def spawn_box(self, cell: Tuple[int, int], element: Element, box_id: str) -> None:
-        if len(self.occupants.get(cell, deque())) >= self.element_capacity(element):
-            return
-        cx, cy = self.cell_center(cell)
-        direction = DIRS.get(element.rotation, (1, 0))
-        box = Box(box_id=box_id, x=cx, y=cy, direction=direction, current_cell=cell, current_element=cell)
-        self.boxes[box.box_id] = box
-        self.occupants.setdefault(cell, deque()).append(box.box_id)
-        element.fifo.append(box.box_id)
-        self.log(f"Caja {box.box_id} liberada por inducción {cell}")
-
-    def element_direction(self, element: Element, box: Box) -> Tuple[int, int]:
-        if element.kind in ("belt", "belt_input", "induction"):
-            return DIRS.get(element.rotation, (1, 0))
-        if element.kind == "diverter":
-            if box.next_diverter_dir is None:
-                options = [(0, -1), (1, 0), (0, 1)]
-                choice = options[element.rr_index % len(options)]
-                element.rr_index += 1
-                box.next_diverter_dir = choice
-            return box.next_diverter_dir
-        return box.direction
+        self.simulation_engine.spawn_box(cell, element, box_id)
 
     def try_move_box(self, box: Box, dt: float) -> None:
-        speed = self.settings["sim_speed_cells"] * CELL_SIZE
-        dx, dy = box.direction
-        new_x, new_y = box.x + dx * speed * dt, box.y + dy * speed * dt
-        cur_cell = self.world_to_cell(box.x, box.y)
-        next_cell = self.world_to_cell(new_x, new_y)
-
-        if next_cell != cur_cell:
-            target_el = self.elements.get(next_cell)
-            if target_el is not None:
-                occ = self.occupants.setdefault(next_cell, deque())
-                if len(occ) >= self.element_capacity(target_el):
-                    return
-
-            old_element_cell = box.current_element
-            box.x, box.y = new_x, new_y
-            box.current_cell = next_cell
-
-            if old_element_cell != next_cell:
-                if old_element_cell is not None and old_element_cell in self.occupants:
-                    if box.box_id in self.occupants[old_element_cell]:
-                        self.occupants[old_element_cell].remove(box.box_id)
-                    old_el = self.elements.get(old_element_cell)
-                    if old_el is not None and box.box_id in old_el.fifo:
-                        old_el.fifo.remove(box.box_id)
-
-                if target_el is not None:
-                    self.occupants.setdefault(next_cell, deque()).append(box.box_id)
-                    target_el.fifo.append(box.box_id)
-                    box.current_element = next_cell
-                    box.pending_turn_cell = next_cell
-                    box.pending_direction = self.element_direction(target_el, box)
-                    if target_el.kind != "diverter":
-                        box.next_diverter_dir = None
-                else:
-                    box.current_element = None
-                    box.pending_turn_cell = None
-                    box.pending_direction = None
-        else:
-            box.x, box.y = new_x, new_y
-
-        if box.pending_turn_cell is not None and box.pending_direction is not None:
-            center_x, center_y = self.cell_center(box.pending_turn_cell)
-            dir_x, dir_y = box.direction
-            crossed_center = (dir_x > 0 and box.x >= center_x) or (dir_x < 0 and box.x <= center_x) or (dir_y > 0 and box.y >= center_y) or (dir_y < 0 and box.y <= center_y)
-            if crossed_center:
-                box.direction = box.pending_direction
-                box.pending_direction = None
-                box.pending_turn_cell = None
+        self.simulation_engine.try_move_box(box, dt)
 
     def get_next_available_box_id(self) -> str:
         return self.id_provider.get_next_box_id()
@@ -217,116 +146,30 @@ class WarehouseSim:
         return self.id_provider.get_next_tracking_id()
 
     def call_scan_endpoint(self, payload: Dict) -> Tuple[int, Dict]:
-        req = urllib.request.Request(
-            self.settings["scan_endpoint"],
-            method="POST",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                body = resp.read().decode("utf-8") or "{}"
-                return int(resp.status), json.loads(body)
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8") or "{}"
-            try:
-                parsed = json.loads(body)
-            except json.JSONDecodeError:
-                parsed = {"message": body}
-            return exc.code, parsed
-        except Exception as exc:  # noqa: BLE001
-            return 500, {"message": f"Sistema no disponible. {exc}"}
+        return self.simulation_engine.call_scan_endpoint(payload)
 
     def run_induction_cycle(self, cell: Tuple[int, int], element: Element) -> None:
-        if not element.tag:
-            element.tag = self.settings["scanner_default_tag"]
-
-        if not element.tag:
-            return
-
-        if element.held_box_id is None:
-            try:
-                box_id = self.get_next_available_box_id()
-                tracking_id = self.get_next_tracking_id()
-            except Exception as exc:  # noqa: BLE001
-                self.logger.exception("Oracle fetch failed for induction cell=%s tag=%s", cell, element.tag)
-                self.fail_with_error(element, f"Error consultando Oracle: {exc}")
-                return
-            payload = {"scannerId": element.tag, "barcode": box_id, "trackingId": tracking_id}
-            status, body = self.call_scan_endpoint(payload)
-            if status >= 400:
-                self.logger.error("Scan endpoint error status=%s payload=%s response=%s", status, payload, body)
-                self.fail_with_error(element, str(body.get("message", "Sistema no disponible.")))
-                return
-            decision = int(body.get("decision", 0))
-            if decision == 0:
-                element.held_box_id = box_id
-                element.held_tracking_id = tracking_id
-                element.held_decision = decision
-                self.log(f"Inducción {element.tag}: caja {box_id} retenida ({tracking_id})")
-            else:
-                self.spawn_box(cell, element, box_id)
-        else:
-            payload = {
-                "scannerId": element.tag,
-                "trackingId": element.held_tracking_id,
-                "decision": element.held_decision,
-            }
-            status, body = self.call_scan_endpoint(payload)
-            if status >= 400:
-                self.logger.error("Scan endpoint polling error status=%s payload=%s response=%s", status, payload, body)
-                self.fail_with_error(element, str(body.get("message", "Sistema no disponible.")))
-                return
-            decision = int(body.get("decision", 0))
-            if decision == 99:
-                self.spawn_box(cell, element, element.held_box_id)
-                self.log(f"Inducción {element.tag}: libera caja en espera {element.held_box_id}")
-                element.held_box_id = None
-                element.held_tracking_id = None
-                element.held_decision = None
+        self.simulation_engine.run_induction_cycle(cell, element)
 
     def update_simulation(self, dt: float) -> None:
-        if not self.is_running:
-            return
-
-        for cell, el in self.elements.items():
-            if el.kind == "induction":
-                el.spawn_timer += dt
-                if el.spawn_timer >= self.settings["induction_poll_interval"]:
-                    el.spawn_timer = 0.0
-                    self.run_induction_cycle(cell, el)
-
-        for box in list(self.boxes.values()):
-            self.try_move_box(box, dt)
-            if abs(box.x) > CELL_SIZE * 200 or abs(box.y) > CELL_SIZE * 200:
-                if box.current_element in self.occupants and box.box_id in self.occupants[box.current_element]:
-                    self.occupants[box.current_element].remove(box.box_id)
-                self.boxes.pop(box.box_id, None)
+        self.simulation_engine.update(dt, self.is_running)
 
     def save_layout(self) -> None:
-        data = {
-            "camera": {"x": self.camera_x, "y": self.camera_y, "zoom": self.zoom},
-            "elements": [
-                {"cell": [x, y], "kind": e.kind, "rotation": e.rotation, "capacity": e.capacity, "tag": e.tag}
-                for (x, y), e in self.elements.items()
-            ],
-        }
-        with LAYOUT_PATH.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        self.layout_store.save(self.viewport.camera_x, self.viewport.camera_y, self.viewport.zoom, self.elements)
         self.log("Layout guardado")
 
     def load_layout(self) -> None:
-        if not LAYOUT_PATH.exists():
+        if not self.layout_store.exists():
             self.log("No existe layout.json")
             return
-        data = json.loads(LAYOUT_PATH.read_text(encoding="utf-8"))
+        data = self.layout_store.load()
         self.elements.clear()
         self.boxes.clear()
         self.occupants.clear()
         cam = data.get("camera", {})
-        self.camera_x = cam.get("x", self.camera_x)
-        self.camera_y = cam.get("y", self.camera_y)
-        self.zoom = cam.get("zoom", self.zoom)
+        self.viewport.camera_x = cam.get("x", self.viewport.camera_x)
+        self.viewport.camera_y = cam.get("y", self.viewport.camera_y)
+        self.viewport.zoom = cam.get("zoom", self.viewport.zoom)
 
         for item in data.get("elements", []):
             cell = tuple(item["cell"])
@@ -376,7 +219,7 @@ class WarehouseSim:
     def draw_elements(self) -> None:
         for cell, element in self.elements.items():
             sx, sy = self.world_to_screen(cell[0] * CELL_SIZE, cell[1] * CELL_SIZE)
-            size = int(CELL_SIZE * self.zoom)
+            size = int(CELL_SIZE * self.viewport.zoom)
             if size <= 2:
                 continue
             icon = pygame.transform.smoothscale(self.draw_icon(element.kind, element.rotation), (size, size))
@@ -391,7 +234,7 @@ class WarehouseSim:
                 pygame.draw.rect(self.screen, YELLOW, (sx, sy, size, size), 2)
 
     def draw_boxes(self) -> None:
-        box_size = max(6, int(110 * self.zoom))
+        box_size = max(6, int(110 * self.viewport.zoom))
         for box in self.boxes.values():
             sx, sy = self.world_to_screen(box.x, box.y)
             rect = pygame.Rect(0, 0, box_size, box_size)
@@ -495,7 +338,7 @@ class WarehouseSim:
         wx, wy = self.screen_to_world(*pygame.mouse.get_pos())
         cell = self.world_to_cell(wx, wy)
         sx, sy = self.world_to_screen(cell[0] * CELL_SIZE, cell[1] * CELL_SIZE)
-        size = int(CELL_SIZE * self.zoom)
+        size = int(CELL_SIZE * self.viewport.zoom)
         if size <= 2:
             return
         icon = pygame.transform.smoothscale(self.draw_icon(self.place_kind, self.place_rotation, alpha=140), (size, size))
@@ -513,7 +356,7 @@ class WarehouseSim:
             e.has_error = False
 
     def box_at_screen(self, pos: Tuple[int, int]) -> Optional[Box]:
-        box_size = max(6, int(110 * self.zoom))
+        box_size = max(6, int(110 * self.viewport.zoom))
         for box in self.boxes.values():
             sx, sy = self.world_to_screen(box.x, box.y)
             rect = pygame.Rect(0, 0, box_size, box_size)
@@ -661,7 +504,7 @@ class WarehouseSim:
                 else:
                     for cell in self.elements:
                         sx, sy = self.world_to_screen(cell[0] * CELL_SIZE, cell[1] * CELL_SIZE)
-                        size = int(CELL_SIZE * self.zoom)
+                        size = int(CELL_SIZE * self.viewport.zoom)
                         if rect.colliderect(pygame.Rect(sx, sy, size, size)):
                             self.selected_cells.add(cell)
             self.select_drag = False
@@ -671,8 +514,8 @@ class WarehouseSim:
 
     def handle_mouse_motion(self, event: pygame.event.Event) -> None:
         if self.pan_drag:
-            self.camera_x -= (event.pos[0] - self.pan_prev[0]) / self.zoom
-            self.camera_y -= (event.pos[1] - self.pan_prev[1]) / self.zoom
+            self.viewport.camera_x -= (event.pos[0] - self.pan_prev[0]) / self.viewport.zoom
+            self.viewport.camera_y -= (event.pos[1] - self.pan_prev[1]) / self.viewport.zoom
             self.pan_prev = event.pos
         if self.select_drag:
             self.select_end = event.pos
