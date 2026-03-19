@@ -12,3 +12,6 @@ class SequenceIdProvider:
     def get_next_tracking_id(self) -> int:
         self._tracking_seq += 1
         return self._tracking_seq
+
+    def get_reinduction_box_id(self, related_scan: str):
+        return None

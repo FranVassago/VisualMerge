@@ -101,3 +101,12 @@ Por defecto se usan:
   - sobre **induction** o **belt_input**: panel contextual para editar Tag (único).
   - sobre una caja: panel contextual con ID completo de la caja.
 - Las cajas muestran solo los 4 últimos caracteres del ID en la vista principal.
+
+
+## Nuevas funcionalidades de desvío y reinducción
+
+- `main.py` corrige la carga de configuración para inicializar siempre `ConfigManager(CONFIG_PATH, DB_CONFIG_PATH)`.
+- `diverter` ahora envía al endpoint `scannerId + trackingId + barcode` usando su `tag` como `scannerId`, y la respuesta decide si la caja gira `IZQ`, `DER` o sigue `RECTO`.
+- Nuevo elemento `Cinta+Stopper`: muestra un punto rojo y actúa como tramo sin salida; la caja que alcanza el centro se detiene y provoca la acumulación de las cajas posteriores.
+- `Cinta+Input` añade el atributo `RelatedScan` en el panel contextual. Con ese valor hace polling recurrente a Oracle para reinducir el siguiente bulto pendiente; si la caja ya existe en pantalla se recoloca en este punto y, si no, se crea ahí.
+- `layout.json` persiste también el campo `related_scan` de cada `belt_input`.

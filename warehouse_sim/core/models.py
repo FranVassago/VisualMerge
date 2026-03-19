@@ -14,6 +14,7 @@ class Element:
     rr_index: int = 0
     fifo: deque = field(default_factory=deque)
     tag: Optional[str] = None
+    related_scan: Optional[str] = None
     held_box_id: Optional[str] = None
     held_tracking_id: Optional[int] = None
     held_decision: Optional[int] = None
@@ -31,6 +32,7 @@ class Box:
     next_diverter_dir: Optional[Tuple[int, int]] = None
     pending_direction: Optional[Tuple[int, int]] = None
     pending_turn_cell: Optional[Tuple[int, int]] = None
+    pending_tracking_id: Optional[int] = None
 
 
 @dataclass

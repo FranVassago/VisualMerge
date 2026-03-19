@@ -56,7 +56,7 @@ class WarehouseSim:
         self.eraser_drag = False
 
         self.show_config = False
-        self.config_manager = ConfigManager(CONFIG_PATH)
+        self.config_manager = ConfigManager(CONFIG_PATH, DB_CONFIG_PATH)
         self.layout_store = LayoutStore(LAYOUT_PATH)
         self.settings = self.config_manager.load(dict(DEFAULT_SETTINGS))
         self.id_provider = self.config_manager.build_id_provider(self.settings)
@@ -71,6 +71,7 @@ class WarehouseSim:
             cell_center=self.cell_center,
             next_box_id=self.get_next_available_box_id,
             next_tracking_id=self.get_next_tracking_id,
+            id_provider=self.id_provider,
             on_log=self.log,
             on_error=self.fail_with_error,
         )
@@ -79,6 +80,7 @@ class WarehouseSim:
             ("induction", "Inducción"),
             ("belt", "Cinta"),
             ("belt_input", "Cinta+Input"),
+            ("belt_stopper", "Cinta+Stopper"),
             ("diverter", "Diverter"),
             ("eraser", "Borrador"),
             ("save", "Guardar"),
@@ -87,6 +89,8 @@ class WarehouseSim:
 
         self.context_menu: Optional[ContextMenu] = None
         self.tag_input_value = ""
+        self.related_scan_input_value = ""
+        self.context_field = "tag"
 
     def log(self, message: str) -> None:
         self.logs.appendleft(message)
@@ -102,6 +106,7 @@ class WarehouseSim:
         self.settings = self.config_manager.load(self.settings)
         self.id_provider = self.config_manager.build_id_provider(self.settings)
         self.simulation_engine.settings = self.settings
+        self.simulation_engine.id_provider = self.id_provider
 
     def save_config(self) -> None:
         self.config_manager.save(self.settings)
@@ -185,6 +190,7 @@ class WarehouseSim:
                 rotation=int(item.get("rotation", 0)) % 360,
                 capacity=int(item.get("capacity", 1)),
                 tag=item.get("tag"),
+                related_scan=item.get("related_scan"),
             )
 
     def draw_icon(self, kind: str, rotation: int, alpha: int = 255) -> pygame.Surface:
@@ -195,12 +201,14 @@ class WarehouseSim:
         if kind == "induction":
             pts = [(62, 24), (74, 56), (106, 62), (74, 68), (62, 100), (50, 68), (18, 62), (50, 56)]
             pygame.draw.polygon(surf, (WHITE[0], WHITE[1], WHITE[2], a), pts, 4)
-        elif kind in ("belt", "belt_input"):
+        elif kind in ("belt", "belt_input", "belt_stopper"):
             pygame.draw.line(surf, (WHITE[0], WHITE[1], WHITE[2], a), (12, 14), (112, 14), 7)
             pygame.draw.line(surf, (WHITE[0], WHITE[1], WHITE[2], a), (12, 110), (112, 110), 7)
             pygame.draw.lines(surf, (WHITE[0], WHITE[1], WHITE[2], a), False, [(30, 30), (74, 62), (30, 94)], 6)
             if kind == "belt_input":
                 pygame.draw.circle(surf, (GREEN[0], GREEN[1], GREEN[2], a), (98, 30), 11)
+            if kind == "belt_stopper":
+                pygame.draw.circle(surf, (RED[0], RED[1], RED[2], a), (62, 62), 11)
         elif kind == "diverter":
             pygame.draw.polygon(surf, (WHITE[0], WHITE[1], WHITE[2], a), [(62, 20), (78, 40), (46, 40)], 4)
             pygame.draw.polygon(surf, (WHITE[0], WHITE[1], WHITE[2], a), [(104, 62), (84, 78), (84, 46)], 4)
@@ -234,6 +242,9 @@ class WarehouseSim:
             if element.tag and self.supports_context_menu(element):
                 tag_txt = self.small_font.render(element.tag, True, GREEN)
                 self.screen.blit(tag_txt, (sx + 6, sy + 4))
+            if element.kind == "belt_input" and element.related_scan:
+                rel_txt = self.small_font.render(f"RS:{element.related_scan}", True, YELLOW)
+                self.screen.blit(rel_txt, (sx + 6, sy + 20))
             if element.has_error:
                 warn = self.font.render("!", True, RED)
                 self.screen.blit(warn, (sx + size - 16, sy + 2))
@@ -314,7 +325,7 @@ class WarehouseSim:
         if not self.context_menu:
             return pygame.Rect(0, 0, 0, 0)
         x, y = self.context_menu.screen_pos
-        return pygame.Rect(x, y, 260, 110)
+        return pygame.Rect(x, y, 280, 160)
 
     def draw_context_menu(self) -> None:
         if not self.context_menu:
@@ -323,12 +334,25 @@ class WarehouseSim:
         pygame.draw.rect(self.screen, (28, 28, 34), rect, border_radius=6)
         pygame.draw.rect(self.screen, (110, 110, 120), rect, 1, border_radius=6)
         if self.context_menu.menu_type == "element":
+            element = self.elements.get(self.context_menu.cell) if self.context_menu.cell else None
             self.screen.blit(self.small_font.render("Tag", True, WHITE), (rect.x + 12, rect.y + 10))
-            input_rect = pygame.Rect(rect.x + 12, rect.y + 32, 236, 28)
-            pygame.draw.rect(self.screen, (40, 40, 50), input_rect, border_radius=4)
-            pygame.draw.rect(self.screen, (140, 140, 155), input_rect, 1, border_radius=4)
-            self.screen.blit(self.small_font.render(self.tag_input_value or "(vacío)", True, WHITE), (input_rect.x + 8, input_rect.y + 6))
-            self.screen.blit(self.small_font.render("Enter guardar / Backspace borrar", True, (170, 170, 180)), (rect.x + 12, rect.y + 70))
+            tag_rect = pygame.Rect(rect.x + 12, rect.y + 28, 256, 24)
+            pygame.draw.rect(self.screen, (40, 40, 50), tag_rect, border_radius=4)
+            pygame.draw.rect(self.screen, YELLOW if self.context_field == "tag" else (140, 140, 155), tag_rect, 1, border_radius=4)
+            self.screen.blit(self.small_font.render(self.tag_input_value or "(vacío)", True, WHITE), (tag_rect.x + 8, tag_rect.y + 4))
+            self.screen.blit(self.small_font.render("RelatedScan", True, WHITE), (rect.x + 12, rect.y + 64))
+            rel_rect = pygame.Rect(rect.x + 12, rect.y + 82, 256, 24)
+            pygame.draw.rect(self.screen, (40, 40, 50), rel_rect, border_radius=4)
+            pygame.draw.rect(
+                self.screen,
+                YELLOW if self.context_field == "related_scan" else (140, 140, 155),
+                rel_rect,
+                1,
+                border_radius=4,
+            )
+            rel_value = self.related_scan_input_value if element and element.kind == "belt_input" else "N/A"
+            self.screen.blit(self.small_font.render(rel_value or "(vacío)", True, WHITE), (rel_rect.x + 8, rel_rect.y + 4))
+            self.screen.blit(self.small_font.render("Tab cambia campo / Enter guardar", True, (170, 170, 180)), (rect.x + 12, rect.y + 122))
         elif self.context_menu.menu_type == "box":
             self.screen.blit(self.small_font.render("Caja", True, WHITE), (rect.x + 12, rect.y + 10))
             self.screen.blit(self.small_font.render(self.context_menu.box_id or "", True, BLUE), (rect.x + 12, rect.y + 36))
@@ -385,16 +409,16 @@ class WarehouseSim:
         if not element:
             return
         value = self.tag_input_value.strip()
-        if not value:
-            element.tag = None
-            self.log("Tag eliminado")
-            self.context_menu = None
-            return
-        if not self.element_tag_is_unique(value, self.context_menu.cell):
+        related_value = self.related_scan_input_value.strip()
+        if value and not self.element_tag_is_unique(value, self.context_menu.cell):
             self.log("Tag duplicado: debe ser único")
             return
-        element.tag = value
-        self.log(f"Tag guardado: {value}")
+        element.tag = value or None
+        if element.kind == "belt_input":
+            element.related_scan = related_value or None
+            self.log(f"Configuración guardada: tag={element.tag or '-'}, relatedScan={element.related_scan or '-'}")
+        else:
+            self.log("Tag eliminado" if not value else f"Tag guardado: {value}")
         self.context_menu = None
 
     def handle_toolbar_click(self, pos: Tuple[int, int]) -> bool:
@@ -403,7 +427,7 @@ class WarehouseSim:
             rect = pygame.Rect(x, WINDOW_H - 66, 150, 48)
             if rect.collidepoint(pos):
                 self.context_menu = None
-                if key in {"induction", "belt", "belt_input", "diverter"}:
+                if key in {"induction", "belt", "belt_input", "belt_stopper", "diverter"}:
                     self.mode = "placing"
                     self.place_kind = key
                     self.place_rotation = 0
@@ -487,6 +511,8 @@ class WarehouseSim:
                 if element and self.supports_context_menu(element):
                     self.context_menu = ContextMenu(menu_type="element", cell=cell, screen_pos=pos)
                     self.tag_input_value = element.tag or ""
+                    self.related_scan_input_value = element.related_scan or ""
+                    self.context_field = "tag"
                     return
                 self.context_menu = None
                 self.pan_drag = True
@@ -542,11 +568,23 @@ class WarehouseSim:
                     if event.key == pygame.K_ESCAPE:
                         self.context_menu = None
                         continue
-                    if event.key == pygame.K_BACKSPACE:
-                        self.tag_input_value = self.tag_input_value[:-1]
+                    if event.key == pygame.K_TAB:
+                        element = self.elements.get(self.context_menu.cell) if self.context_menu else None
+                        if element and element.kind == "belt_input":
+                            self.context_field = "related_scan" if self.context_field == "tag" else "tag"
                         continue
-                    if event.unicode and event.unicode.isprintable() and len(self.tag_input_value) < 20:
-                        self.tag_input_value += event.unicode
+                    if event.key == pygame.K_BACKSPACE:
+                        if self.context_field == "related_scan":
+                            self.related_scan_input_value = self.related_scan_input_value[:-1]
+                        else:
+                            self.tag_input_value = self.tag_input_value[:-1]
+                        continue
+                    if event.unicode and event.unicode.isprintable():
+                        if self.context_field == "related_scan":
+                            if len(self.related_scan_input_value) < 20:
+                                self.related_scan_input_value += event.unicode
+                        elif len(self.tag_input_value) < 20:
+                            self.tag_input_value += event.unicode
                         continue
                 if event.key == pygame.K_ESCAPE:
                     self.mode = "idle"
