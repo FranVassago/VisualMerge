@@ -13,7 +13,14 @@ class LayoutStore:
         data = {
             "camera": {"x": camera_x, "y": camera_y, "zoom": zoom},
             "elements": [
-                {"cell": [x, y], "kind": e.kind, "rotation": e.rotation, "capacity": e.capacity, "tag": e.tag}
+                {
+                    "cell": [x, y],
+                    "kind": e.kind,
+                    "rotation": e.rotation,
+                    "capacity": e.capacity,
+                    "tag": e.tag,
+                    "related_scan": e.related_scan,
+                }
                 for (x, y), e in elements.items()
             ],
         }

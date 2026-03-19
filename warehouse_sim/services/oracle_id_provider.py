@@ -24,6 +24,14 @@ class OracleQueryConfig:
 class OracleIdProvider:
     """Obtiene idCaja y trackingId desde Oracle."""
 
+    REINDUCTION_QUERY = """
+SELECT MATCAJA
+  FROM TABLE ( XVDPLC.BULTOS_EN_CIRCUITO )
+ WHERE NEXTSCANNERHOST = :related_scan
+ ORDER BY VD.TO_DATE(FECCREA, HORACREA)
+ FETCH FIRST 1 ROWS ONLY
+""".strip()
+
     def __init__(self, connection: OracleConnectionConfig, queries: OracleQueryConfig) -> None:
         self.connection = connection
         self.queries = queries
@@ -50,18 +58,26 @@ class OracleIdProvider:
         value = self._fetch_single_value(self.queries.tracking_id_query)
         return int(value)
 
-    def _fetch_single_value(self, query: str) -> Optional[str]:
+    def get_reinduction_box_id(self, related_scan: str) -> Optional[str]:
+        if not related_scan.strip():
+            return None
+        value = self._fetch_single_value(self.REINDUCTION_QUERY, {"related_scan": related_scan.strip()})
+        if value is None:
+            return None
+        return str(value)
+
+    def _fetch_single_value(self, query: str, params: Optional[dict] = None) -> Optional[str]:
         import oracledb
 
         dsn = oracledb.makedsn(self.connection.host, self.connection.port, sid=self.connection.sid)
         try:
             with oracledb.connect(user=self.connection.user, password=self.connection.password, dsn=dsn) as conn:
                 with conn.cursor() as cursor:
-                    self.logger.info("Executing Oracle query: %s", query)
-                    cursor.execute(query)
+                    self.logger.info("Executing Oracle query: %s params=%s", query, params)
+                    cursor.execute(query, params or {})
                     row = cursor.fetchone()
                     if row is None:
-                        raise ValueError(f"La consulta no devolvió resultados: {query}")
+                        return None
                     self.logger.info("Oracle query result type=%s value=%r", type(row[0]).__name__, row[0])
                     return row[0]
         except Exception:
