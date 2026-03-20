@@ -140,7 +140,7 @@ class WarehouseSim:
         return False
 
     def supports_context_menu(self, element: Element) -> bool:
-        return element.kind in {"induction", "belt_input"}
+        return element.kind in {"induction", "belt_input", "diverter"}
 
     def element_capacity(self, element: Element) -> int:
         return self.simulation_engine.element_capacity(element)
@@ -350,7 +350,11 @@ class WarehouseSim:
                 1,
                 border_radius=4,
             )
-            rel_value = self.related_scan_input_value if element and element.kind == "belt_input" else "N/A"
+            rel_value = (
+                self.related_scan_input_value
+                if element and element.kind in {"belt_input", "diverter"}
+                else "N/A"
+            )
             self.screen.blit(self.small_font.render(rel_value or "(vacío)", True, WHITE), (rel_rect.x + 8, rel_rect.y + 4))
             self.screen.blit(self.small_font.render("Tab cambia campo / Enter guardar", True, (170, 170, 180)), (rect.x + 12, rect.y + 122))
         elif self.context_menu.menu_type == "box":
@@ -414,7 +418,7 @@ class WarehouseSim:
             self.log("Tag duplicado: debe ser único")
             return
         element.tag = value or None
-        if element.kind == "belt_input":
+        if element.kind in {"belt_input", "diverter"}:
             element.related_scan = related_value or None
             self.log(f"Configuración guardada: tag={element.tag or '-'}, relatedScan={element.related_scan or '-'}")
         else:
@@ -570,7 +574,7 @@ class WarehouseSim:
                         continue
                     if event.key == pygame.K_TAB:
                         element = self.elements.get(self.context_menu.cell) if self.context_menu else None
-                        if element and element.kind == "belt_input":
+                        if element and element.kind in {"belt_input", "diverter"}:
                             self.context_field = "related_scan" if self.context_field == "tag" else "tag"
                         continue
                     if event.key == pygame.K_BACKSPACE:

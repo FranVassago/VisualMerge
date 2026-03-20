@@ -19,18 +19,11 @@ class OracleConnectionConfig:
 class OracleQueryConfig:
     box_id_query: str
     tracking_id_query: str
+    reinduction_box_id_query: str
 
 
 class OracleIdProvider:
     """Obtiene idCaja y trackingId desde Oracle."""
-
-    REINDUCTION_QUERY = """
-SELECT MATCAJA
-  FROM TABLE ( XVDPLC.BULTOS_EN_CIRCUITO )
- WHERE NEXTSCANNERHOST = :related_scan
- ORDER BY VD.TO_DATE(FECCREA, HORACREA)
- FETCH FIRST 1 ROWS ONLY
-""".strip()
 
     def __init__(self, connection: OracleConnectionConfig, queries: OracleQueryConfig) -> None:
         self.connection = connection
@@ -61,7 +54,10 @@ SELECT MATCAJA
     def get_reinduction_box_id(self, related_scan: str) -> Optional[str]:
         if not related_scan.strip():
             return None
-        value = self._fetch_single_value(self.REINDUCTION_QUERY, {"related_scan": related_scan.strip()})
+        value = self._fetch_single_value(
+            self.queries.reinduction_box_id_query,
+            {"related_scan": related_scan.strip()},
+        )
         if value is None:
             return None
         return str(value)

@@ -25,6 +25,7 @@ DEFAULT_DB_SETTINGS: Dict[str, object] = {
     "oracle_password": "",
     "oracle_box_id_query": "",
     "oracle_tracking_id_query": "",
+    "oracle_reinduction_box_id_query": "",
 }
 
 
@@ -80,6 +81,7 @@ class ConfigManager:
             "password": str(settings["oracle_password"]),
             "box_id_query": self._normalize_query(str(settings["oracle_box_id_query"])),
             "tracking_id_query": self._normalize_query(str(settings["oracle_tracking_id_query"])),
+            "reinduction_box_id_query": self._normalize_query(str(settings["oracle_reinduction_box_id_query"])),
         }
         with self.db_path.open("w", encoding="utf-8") as db_config_file:
             db_cfg.write(db_config_file)
@@ -100,6 +102,7 @@ class ConfigManager:
         queries = OracleQueryConfig(
             box_id_query=str(settings["oracle_box_id_query"]),
             tracking_id_query=str(settings["oracle_tracking_id_query"]),
+            reinduction_box_id_query=str(settings["oracle_reinduction_box_id_query"]),
         )
         provider = OracleIdProvider(conn, queries)
         provider.validate_connection()
@@ -127,6 +130,9 @@ class ConfigManager:
         settings["oracle_tracking_id_query"] = self._normalize_query(
             oracle.get("tracking_id_query", fallback=str(settings["oracle_tracking_id_query"]))
         )
+        settings["oracle_reinduction_box_id_query"] = self._normalize_query(
+            oracle.get("reinduction_box_id_query", fallback=str(settings["oracle_reinduction_box_id_query"]))
+        )
 
     @staticmethod
     def _validate_oracle_settings(settings: Dict[str, object]) -> None:
@@ -137,6 +143,7 @@ class ConfigManager:
             "oracle_password",
             "oracle_box_id_query",
             "oracle_tracking_id_query",
+            "oracle_reinduction_box_id_query",
         ]
         missing = [field for field in required_fields if not str(settings.get(field, "")).strip()]
         if int(settings.get("oracle_port", 0)) <= 0:
